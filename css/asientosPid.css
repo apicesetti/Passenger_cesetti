@@ -225,3 +225,21 @@
 .ap-cfg-ign { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.75rem; }
 .ap-cfg-ign small { color: var(--ap-text-2); }
 .ap-cfg-ign .ap-row { border: 1px solid var(--ap-bg-2); border-radius: var(--ap-radius); }
+
+/* Vista ocupación / asientos */
+.ap-seg { display: inline-flex; border: 1px solid var(--ap-border); border-radius: var(--ap-radius); overflow: hidden; margin-bottom: 0.5rem; }
+#asientosPid .ap-seg button { border: none; border-radius: 0; height: 1.75rem; background: var(--ap-bg); color: var(--ap-text-2); }
+#asientosPid .ap-seg button + button { border-left: 1px solid var(--ap-border); }
+#asientosPid .ap-seg button.on { background: var(--ap-primary); color: #fff; font-weight: 500; }
+#asientosPid .ap-seg button.on .ap-tag { background: rgba(255,255,255,.2); color: #fff; border-color: transparent; }
+.ap-plano { flex-direction: column; align-items: center; gap: 0.75rem; }
+.ap-demo { align-self: stretch; background: var(--ap-info-bg); color: var(--ap-link); border-radius: var(--ap-radius); padding: 0.5rem 0.75rem; font-size: 0.75rem; }
+.ap-ocup { align-self: stretch; font-size: 0.875rem; color: var(--ap-text-2); }
+.ap-ocup b { font-size: 1.25rem; color: var(--ap-text); font-weight: 500; }
+.ap-pax circle, .ap-pax path { stroke-width: 1.5; }
+.ap-pax.free circle, .ap-pax.free path { fill: var(--ap-bg); stroke: var(--ap-border); }
+.ap-pax.occ circle, .ap-pax.occ path { fill: var(--ap-ok); stroke: var(--ap-ok-fg); }
+.ap-pax.unk circle, .ap-pax.unk path { fill: var(--ap-warn); stroke: #c98a2e; }
+.ap-pax.nohab circle, .ap-pax.nohab path { fill: var(--ap-danger); stroke: #a01f0e; }
+.ap-pax.exc circle, .ap-pax.exc path { fill: var(--ap-err-bg); stroke: var(--ap-danger); stroke-dasharray: 3 2; }
+.ap-legend .sw.exc { background: var(--ap-err-bg); border: 1px dashed var(--ap-danger); }

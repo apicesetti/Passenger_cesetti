@@ -4,7 +4,10 @@ Add-in para MyGeotab que muestra, en tiempo real, quién va sentado en cada veh�
 
 ## Vistas
 - **Flota**: tarjetas por vehículo con ocupación, conductor y alertas. Buscador por patente o nombre.
-- **Detalle**: plano del vehículo visto desde arriba (camioneta, combi o colectivo). Los asientos se llenan del 1 en adelante a medida que suben los pasajeros: verde = pasajero registrado, amarillo = tarjeta sin registrar, violeta = conductor.
+- **Detalle**: selector **Ocupación / Asientos**.
+  - *Ocupación* (por defecto): un ícono por lugar con los ocupados en color, sin asignar asientos.
+  - *Asientos (demo)*: plano del vehículo visto desde arriba, llenado del 1 en adelante por orden de subida. Es ilustrativo: muestra cómo se vería con sensores de peso por asiento.
+  - Colores: verde = pasajero, rojo = no habilitado, naranja = sin registrar, azul = conductor.
 - **Minimapa** (en el detalle): recorrido de las últimas horas, posición actual y un punto por cada subida (verde) y bajada (gris) con popup. Tocar un evento de la lista lo centra en el mapa. Leaflet + OpenStreetMap.
 - **Historial**: subidas y bajadas por rango de fechas (hasta 31 días), vehículo, tipo de evento y pasajero, con fecha, hora, asiento y ubicación (posición GPS interpolada por Geotab en el instante del evento + dirección y zona). Exporta a Excel (CSV).
 - **Alertas**: capacidad superada, persona no habilitada (inhabilitada, vencida o no permitida en ese vehículo) y tarjetas sin registrar. Barra en todas las vistas, aviso emergente, sonido y notificación del navegador mientras el add-in está abierto. También quedan en el Historial.

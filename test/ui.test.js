@@ -89,6 +89,14 @@ const txt = () => $('#asientosPid').textContent;
 
   // Detalle
   $('.ap-card').click(); await sleep(20);
+  // Vista por defecto: ocupación (sin asientos)
+  assert.strictEqual($$('.ap-seat').length, 0, 'por defecto no muestra asientos');
+  assert.strictEqual($$('.ap-pax').length, 15, 'un ícono por lugar');
+  assert.strictEqual($$('.ap-pax.occ, .ap-pax.unk').length, 2, '2 ocupados');
+  assert(txt().includes('2 de 15 lugares ocupados'));
+  assert(!txt().includes('asiento 1'), 'sin mención de asientos en eventos');
+  $('[data-vp=asientos]').click(); await sleep(10);
+  assert(txt().includes('Demostración'), 'aviso de demo');
   assert.strictEqual($$('.ap-seat').length, 16, '15 asientos + conductor');
   assert.strictEqual($$('.ap-seat.unk').length, 1, '1 tarjeta sin registrar (la otra es PASAJERO_1)');
   assert.strictEqual($('.ap-seat[data-seat="1"] text').textContent, 'P1', 'PASAJERO 1 por llave de Geotab');

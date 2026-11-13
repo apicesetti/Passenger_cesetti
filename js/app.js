@@ -6,7 +6,7 @@ geotab.addin.asientosPid = function () {
   var XLSX_URL = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
   var TIPOS = { camioneta: 'Camioneta', combi: 'Combi', colectivo: 'Colectivo' };
   var ASIENTOS_DEF = { camioneta: 4, combi: 15, colectivo: 45 };
-  var CFG_DEF = { descensoMin: 30, desbloqueoSeg: 60, modo: 'pid', resetIgnicion: false, ventanaHoras: 12, refrescoSeg: 5, sonidoAlertas: true, ignorados: [], pidIoxType: 4247 };
+  var CFG_DEF = { descensoMin: 30, desbloqueoSeg: 60, modo: 'pid', resetIgnicion: false, ventanaHoras: 12, refrescoSeg: 5, sonidoAlertas: true, ignorados: [], pidIoxType: 4247, vistaPlano: 'ocupacion' };
   var ROLES = { pasajero: 'Pasajero', conductor: 'Conductor' };
 
   var api = null;
@@ -31,6 +31,7 @@ geotab.addin.asientosPid = function () {
     alertasVistas: {},         // clave -> true (ya notificadas)
     alertasIniciadas: false,
     alertasAbiertas: false,
+    vistaPlano: null,          // 'ocupacion' | 'asientos' (elegida por el usuario en este navegador)
     filtroRol: '',
     filtroHab: '',
     selPersonas: {},
@@ -325,12 +326,49 @@ geotab.addin.asientosPid = function () {
     r.abordo.forEach(function (a) {
       var p = persona(a.hex);
       var nom = p ? p.nombre : 'Tarjeta ' + a.hex;
-      if (!a.asiento) out.push({ clave: devId + '|cap|' + a.hex + '|' + a.desde, nivel: 'alta', dev: devId, hex: a.hex, t: tExc[a.hex] || a.desde, texto: 'Capacidad superada: ' + nom + ' subió sin asiento libre (' + r.asientos + ' asientos)' });
+      if (!a.asiento) out.push({ clave: devId + '|cap|' + a.hex + '|' + a.desde, nivel: 'alta', dev: devId, hex: a.hex, t: tExc[a.hex] || a.desde, texto: 'Capacidad superada: ' + nom + ' subió con el vehículo lleno (' + r.asientos + ' lugares)' });
       var mot = motivoNoHabilitado(p, devId, a.desde);
       if (mot) out.push({ clave: devId + '|hab|' + a.hex + '|' + a.desde, nivel: 'alta', dev: devId, hex: a.hex, t: a.desde, texto: nom + ' no está habilitado: ' + mot });
       if (!p) out.push({ clave: devId + '|desc|' + a.hex + '|' + a.desde, nivel: 'media', dev: devId, hex: a.hex, t: a.desde, texto: 'Tarjeta sin registrar ' + a.hex });
     });
     return out;
+  }
+
+  /* Vista del vehículo: ocupación (por defecto) o asientos (demostración, requiere sensores por asiento). */
+  function modoAsientos() {
+    if (!S.vistaPlano) {
+      var guardada = null;
+      try { guardada = window.localStorage.getItem('apVistaPlano'); } catch (e) { /* sin storage */ }
+      S.vistaPlano = guardada || S.cfg.vistaPlano || 'ocupacion';
+    }
+    return S.vistaPlano === 'asientos';
+  }
+  function setVistaPlano(v) {
+    S.vistaPlano = v;
+    try { window.localStorage.setItem('apVistaPlano', v); } catch (e) { /* sin storage */ }
+  }
+  function txtAsiento(n) { return n && modoAsientos() ? ' · asiento ' + n : ''; }
+
+  /* Pictograma de ocupación: un ícono por lugar, sin asignar asientos. */
+  function svgOcupacion(e) {
+    var orden = e.abordo.slice().sort(function (a, b) { return a.desde - b.desde; });
+    var total = Math.max(e.asientos, orden.length);
+    var cols = total <= 6 ? total : total <= 16 ? Math.ceil(total / 2) > 8 ? 8 : Math.ceil(total / 2) : 10;
+    cols = Math.max(cols, 1);
+    var W = 40, H = 46, filas = Math.ceil(total / cols);
+    var s = '<svg viewBox="0 0 ' + (cols * W) + ' ' + (filas * H) + '" width="' + Math.min(cols * W * 1.15, 440) + '" class="ap-svg" role="img" aria-label="Ocupación">';
+    for (var i = 0; i < total; i++) {
+      var x = (i % cols) * W, y = Math.floor(i / cols) * H, a = orden[i], cls = 'free', tip = 'Lugar libre';
+      if (a) {
+        var p = persona(a.hex), mot = motivoNoHabilitado(p, S.sel, a.desde);
+        cls = i >= e.asientos ? 'exc' : !p ? 'unk' : mot ? 'nohab' : 'occ';
+        tip = (p ? p.nombre : 'Tarjeta sin registrar ' + a.hex) + ' · subió ' + hora(a.desde) + (mot ? ' — ' + mot : '') + (i >= e.asientos ? ' — supera la capacidad' : '');
+      }
+      s += '<g class="ap-pax ' + cls + '"><title>' + esc(tip) + '</title>' +
+        '<circle cx="' + (x + 20) + '" cy="' + (y + 11) + '" r="7"/>' +
+        '<path d="M' + (x + 8) + ' ' + (y + 38) + ' v-6 a12 12 0 0 1 24 0 v6 z"/></g>';
+    }
+    return s + '</svg>';
   }
 
   function nombrePas(hex) {
@@ -515,7 +553,7 @@ geotab.addin.asientosPid = function () {
         '<div class="ap-bar-bg"><div class="ap-bar-fg ' + cls + '" style="width:' + pct + '%"></div></div>' +
         '<div class="ap-card-foot">' + (cond ? 'Conductor: ' + esc(cond) : 'Sin conductor') +
         (e.desconocidas ? ' · <span class="amber">' + e.desconocidas + ' sin registrar</span>' : '') +
-        (e.excedidos.length ? ' · <span class="red">' + e.excedidos.length + ' sin asiento</span>' : '') +
+        (e.excedidos.length ? ' · <span class="red">' + e.excedidos.length + ' sobre la capacidad</span>' : '') +
         (altas ? '<div class="ap-card-alert">⚠ ' + altas + ' alerta' + (altas > 1 ? 's' : '') + '</div>' : '') + '</div>' +
         '</button>';
     }).join('') + '</div>';
@@ -567,7 +605,7 @@ geotab.addin.asientosPid = function () {
 
   var ACCIONES = {
     sube: ['↗', 'subió', 'green'], baja: ['↙', 'bajó', ''], reascenso: ['↻', 'volvió a marcar (sigue a bordo)', ''],
-    excedido: ['!', 'subió sin asiento libre', 'red'], reubicado: ['→', 'pasó a asiento', 'green'],
+    excedido: ['!', 'subió por encima de la capacidad', 'red'], reubicado: ['→', 'quedó dentro de la capacidad', 'green'],
     bloqueada: ['·', 'lectura repetida ignorada', 'muted'], vaciado: ['↙', 'bajó (motor apagado)', ''],
     conductor: ['·', 'pasó su llave de conductor por el lector (no ocupa asiento)', 'muted']
   };
@@ -593,8 +631,9 @@ geotab.addin.asientosPid = function () {
         '</div></div>' +
         '<div class="ap-detail"><div class="ap-col">' +
         '<div class="ap-metrics" id="ap-d-metrics"></div>' +
+        '<div class="ap-seg" role="tablist"><button data-vp="ocupacion">Ocupación</button><button data-vp="asientos">Asientos <span class="ap-tag">demo</span></button></div>' +
         '<div class="ap-plano" id="ap-d-plano"></div>' +
-        '<div class="ap-legend"><span><i class="sw occ"></i>Pasajero</span><span><i class="sw nohab"></i>No habilitado</span><span><i class="sw unk"></i>Sin registrar</span><span><i class="sw drv"></i>Conductor</span><span><i class="sw free"></i>Libre</span></div>' +
+        '<div class="ap-legend" id="ap-d-legend"></div>' +
         '<div id="ap-d-warn"></div>' +
         '<h4>Recorrido</h4><div class="ap-map-wrap"><div id="ap-map"></div><div class="ap-map-msg" id="ap-map-msg">Cargando mapa…</div></div>' +
         '<div class="ap-legend"><span><i class="sw ruta"></i>Últimas ' + esc(S.cfg.ventanaHoras) + ' h</span><span><i class="dot up"></i>Subida</span><span><i class="dot down"></i>Bajada</span><span><i class="dot veh"></i>Posición actual</span></div>' +
@@ -608,6 +647,8 @@ geotab.addin.asientosPid = function () {
         if (b && body.contains(b)) abrirFormPasajero(null, b.getAttribute('data-reg'));
         var f = ev.target.closest && ev.target.closest('[data-foco]');
         if (f && body.contains(f)) Mapa.enfocar(f.getAttribute('data-foco'));
+        var vp = ev.target.closest && ev.target.closest('[data-vp]');
+        if (vp && body.contains(vp)) { setVistaPlano(vp.getAttribute('data-vp')); renderDetalle(); }
       });
       Mapa.iniciar(id);
     }
@@ -616,15 +657,24 @@ geotab.addin.asientosPid = function () {
       '<div class="ap-metric"><div class="lbl">A bordo</div><div class="val">' + n + ' / ' + e.asientos + '</div>' +
       '<div class="ap-bar-bg"><div class="ap-bar-fg ' + (e.excedidos.length ? 'red' : 'green') + '" style="width:' + pct + '%"></div></div></div>' +
       '<div class="ap-metric"><div class="lbl">Conductor (NFC)</div><div class="val sm">' + esc(cond || 'Sin identificar') + '</div></div>';
-    $('#ap-d-plano').innerHTML = svgPlano(v.d, e);
-    $('#ap-d-warn').innerHTML = e.excedidos.length ? '<div class="ap-warn red">' + e.excedidos.length + ' pasajero(s) a bordo sin asiento: se superó la capacidad.</div>' : '';
+    var asientos = modoAsientos();
+    body.querySelectorAll('[data-vp]').forEach(function (b) { b.classList.toggle('on', (b.getAttribute('data-vp') === 'asientos') === asientos); });
+    var libres = Math.max(0, e.asientos - n);
+    $('#ap-d-plano').innerHTML = asientos
+      ? '<div class="ap-demo">Demostración: la ubicación por asiento es ilustrativa (orden de subida). Con sensores de peso por asiento se mostraría dónde está sentado cada pasajero.</div>' + svgPlano(v.d, e)
+      : '<div class="ap-ocup"><b>' + n + '</b> de ' + e.asientos + ' lugares ocupados · ' + (n > e.asientos ? '<span class="red">' + (n - e.asientos) + ' por encima de la capacidad</span>' : libres + ' libre' + (libres === 1 ? '' : 's')) + '</div>' + svgOcupacion(e);
+    $('#ap-d-legend').innerHTML = '<span><i class="sw occ"></i>Pasajero</span><span><i class="sw nohab"></i>No habilitado</span><span><i class="sw unk"></i>Sin registrar</span>' +
+      (asientos ? '<span><i class="sw drv"></i>Conductor</span>' : '<span><i class="sw exc"></i>Sobre la capacidad</span>') + '<span><i class="sw free"></i>Libre</span>';
+    $('#ap-d-warn').innerHTML = e.excedidos.length ? '<div class="ap-warn red">' + e.excedidos.length + ' pasajero(s) por encima de la capacidad del vehículo (' + e.asientos + ').</div>' : '';
 
-    $('#ap-d-abordo').innerHTML = e.abordo.map(function (a) {
+    var listaAbordo = asientos ? e.abordo : e.abordo.slice().sort(function (a, b) { return a.desde - b.desde; });
+    $('#ap-d-abordo').innerHTML = listaAbordo.map(function (a, i) {
       var nom = nombrePas(a.hex);
       var mot = motivoNoHabilitado(persona(a.hex), id, a.desde);
-      return '<div class="ap-row"><span class="ap-num ' + (a.asiento ? (nom ? (mot ? 'red' : 'green') : 'amber') : 'red') + '">' + (a.asiento || '—') + '</span>' +
+      var num = asientos ? (a.asiento || '—') : i + 1;
+      return '<div class="ap-row"><span class="ap-num ' + (a.asiento ? (nom ? (mot ? 'red' : 'green') : 'amber') : 'red') + '"' + (asientos ? ' title="Asiento"' : ' title="Orden de subida"') + '>' + num + '</span>' +
         '<span class="grow">' + (nom ? esc(nom) : '<span class="amber">Tarjeta sin registrar</span>') + ' <span class="muted mono">' + esc(a.hex) + '</span>' +
-        (mot ? '<br><span class="red">⚠ ' + esc(mot) + '</span>' : '') + (a.asiento ? '' : '<br><span class="red">⚠ Sin asiento: capacidad superada</span>') + '</span>' +
+        (mot ? '<br><span class="red">⚠ ' + esc(mot) + '</span>' : '') + (a.asiento ? '' : '<br><span class="red">⚠ Por encima de la capacidad</span>') + '</span>' +
         '<span class="muted">' + hora(a.desde) + '</span>' +
         (nom ? '' : '<button class="ap-link" data-reg="' + esc(a.hex) + '">Registrar</button>') + '</div>';
     }).join('') || '<div class="ap-empty">Nadie a bordo.</div>';
@@ -637,7 +687,7 @@ geotab.addin.asientosPid = function () {
       var nom = nombrePas(l.hex) || l.hex;
       var k = Mapa.clave(l);
       return '<div class="ap-row' + (Mapa.EV[l.accion] ? ' clic" data-foco="' + esc(k) + '" title="Ver en el mapa' : '') + '"><span class="ap-ico ' + a[2] + '">' + a[0] + '</span><span class="grow">' + esc(nom) + ' ' + a[1] +
-        (l.asiento ? ' · asiento ' + l.asiento : '') + '</span><span class="muted">' + hora(l.t) + '</span></div>';
+        txtAsiento(l.asiento) + '</span><span class="muted">' + hora(l.t) + '</span></div>';
     }).join('') || '<div class="ap-empty">Sin lecturas en las últimas ' + esc(S.cfg.ventanaHoras) + ' h.</div>';
 
     Mapa.actualizar(id, e);
@@ -751,7 +801,7 @@ geotab.addin.asientosPid = function () {
         if (yo.marcas[k]) return;
         var tipo = EV[l.accion];
         var nom = nombrePas(l.hex) || 'Tarjeta ' + l.hex;
-        var html = '<b>' + esc(nom) + '</b><br>' + (tipo === 'up' ? 'Subió' : 'Bajó') + (l.asiento ? ' · asiento ' + l.asiento : '') +
+        var html = '<b>' + esc(nom) + '</b><br>' + (tipo === 'up' ? 'Subió' : 'Bajó') + txtAsiento(l.asiento) +
           '<br>' + fechaHora(l.t) + '<br><span style="color:#4e677e">' + pos[0].toFixed(5) + ', ' + pos[1].toFixed(5) + '</span>';
         yo.marcas[k] = L.circleMarker(pos, { radius: 7, color: '#fff', weight: 2, fillColor: puntoColor(tipo), fillOpacity: 1 })
           .bindPopup(html).bindTooltip(esc(nom) + ' · ' + (tipo === 'up' ? 'subió' : 'bajó') + ' ' + hora(l.t))
@@ -1181,7 +1231,7 @@ geotab.addin.asientosPid = function () {
   }
 
   /* --- Historial --- */
-  var EVENTOS_HIST = { sube: 'Subió', baja: 'Bajó', vaciado: 'Bajó (motor apagado)', excedido: 'Subió sin asiento', reubicado: 'Pasó a asiento', reascenso: 'Volvió a marcar' };
+  var EVENTOS_HIST = { sube: 'Subió', baja: 'Bajó', vaciado: 'Bajó (motor apagado)', excedido: 'Subió (sobre la capacidad)', reubicado: 'Quedó dentro de la capacidad', reascenso: 'Volvió a marcar' };
   var MAX_FILAS_HIST = 3000;
 
   function fechaInput(d) {
@@ -1247,7 +1297,7 @@ geotab.addin.asientosPid = function () {
     var filas = filasHistFiltradas();
     var mostrar = filas.slice(0, 500);
     cont.innerHTML = '<div class="ap-muted-line">' + filas.length + ' eventos' + (filas.length > mostrar.length ? ' (se muestran los primeros 500; exportá a Excel para ver todos)' : '') + '</div>' +
-      '<table class="ap-table"><thead><tr><th>Fecha y hora</th><th>Evento</th><th>Pasajero</th><th>Hex tarjeta</th><th>Vehículo</th><th>Asiento</th><th>Alerta</th><th>Ubicación</th></tr></thead><tbody>' +
+      '<table class="ap-table"><thead><tr><th>Fecha y hora</th><th>Evento</th><th>Pasajero</th><th>Hex tarjeta</th><th>Vehículo</th>' + (modoAsientos() ? '<th>Asiento</th>' : '') + '<th>Alerta</th><th>Ubicación</th></tr></thead><tbody>' +
       (mostrar.map(function (r) {
         var p = persona(r.hex);
         var d = S.devices[r.dev] || {};
@@ -1260,8 +1310,8 @@ geotab.addin.asientosPid = function () {
           '<td>' + (p ? esc(p.nombre) : '<span class="amber">Sin registrar</span>') + '</td>' +
           '<td class="mono">' + esc(r.hex) + '</td>' +
           '<td>' + esc(d.licensePlate || '') + ' <span class="muted">' + esc(nombreDev(r.dev)) + '</span></td>' +
-          '<td>' + (r.asiento || '—') + '</td><td>' + (r.alerta ? '<span class="red">⚠ ' + esc(r.alerta) + '</span>' : '') + '</td><td>' + ubic + '</td></tr>';
-      }).join('') || '<tr><td colspan="8" class="ap-empty">Sin subidas ni bajadas en el período.</td></tr>') +
+          (modoAsientos() ? '<td>' + (r.asiento || '—') + '</td>' : '') + '<td>' + (r.alerta ? '<span class="red">⚠ ' + esc(r.alerta) + '</span>' : '') + '</td><td>' + ubic + '</td></tr>';
+      }).join('') || '<tr><td colspan="' + (modoAsientos() ? 8 : 7) + '" class="ap-empty">Sin subidas ni bajadas en el período.</td></tr>') +
       '</tbody></table>';
   }
 
@@ -1397,6 +1447,8 @@ geotab.addin.asientosPid = function () {
       '<small>Cuántas horas hacia atrás se reconstruye quién está a bordo.</small></label>' +
       '<label>Refresco (segundos)<input name="refrescoSeg" type="number" min="5" max="300" step="1" value="' + esc(c.refrescoSeg) + '">' +
       '<small>Cada cuánto se consultan las lecturas nuevas. Mínimo 5 s.</small></label>' +
+      '<label>Vista del vehículo por defecto<select name="vistaPlano"><option value="ocupacion"' + (c.vistaPlano !== 'asientos' ? ' selected' : '') + '>Ocupación (lugares ocupados)</option><option value="asientos"' + (c.vistaPlano === 'asientos' ? ' selected' : '') + '>Asientos (demostración)</option></select>' +
+      '<small>Cada usuario puede cambiarla en el detalle del vehículo; su elección queda guardada en su navegador.</small></label>' +
       '<label class="chk"><input type="checkbox" name="sonidoAlertas"' + (c.sonidoAlertas !== false ? ' checked' : '') + '> Sonido en las alertas</label>' +
       '<div class="ap-cfg-ign"><b>Tarjetas ignoradas</b><small>No ocupan asiento ni generan alertas (por ejemplo, llaves NFC de conductores sin usuario).</small>' +
       ((c.ignorados || []).length ? (c.ignorados || []).map(function (h) {
@@ -1414,6 +1466,7 @@ geotab.addin.asientosPid = function () {
         ventanaHoras: Math.min(48, Math.max(1, Math.round(Number(f.elements.ventanaHoras.value) || 12))),
         refrescoSeg: Math.min(300, Math.max(5, Math.round(Number(f.elements.refrescoSeg.value) || 5))),
         sonidoAlertas: f.elements.sonidoAlertas.checked,
+        vistaPlano: f.elements.vistaPlano.value,
         ignorados: S.cfg.ignorados || []
       };
       guardarConfig(nv).then(function () { toast('Configuración guardada'); })
