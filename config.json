@@ -1,0 +1,17 @@
+{
+  "name": "Mapa de asientos PID",
+  "supportEmail": "soporte@cesetti.com.ar",
+  "version": "1.0.0",
+  "items": [
+    {
+      "url": "https://apicesetti.github.io/Passenger_cesetti/asientosPid.html",
+      "path": "ActivityLink/",
+      "menuName": {
+        "es": "Mapa de asientos",
+        "en": "Seat map"
+      },
+      "icon": "https://apicesetti.github.io/Passenger_cesetti/icon.svg"
+    }
+  ],
+  "isSigned": false
+}
