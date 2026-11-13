@@ -50,8 +50,10 @@ var PidLogic = (function () {
        - modo 'pid': relectura después de "descenso" -> nuevo ascenso (conserva asiento).
        - Al subir toma el primer asiento libre desde el 1; sin lugar -> excedido.
        - Al liberarse un asiento, lo toma el primer excedido en espera.
-       - resetIgnicion: al apagar el motor se bajan todos. */
-  function procesar(eventos, cfg, asientos) {
+       - resetIgnicion: al apagar el motor se bajan todos.
+     opts.ignorar(hex) -> true: la tarjeta es de un conductor o está ignorada; no ocupa asiento. */
+  function procesar(eventos, cfg, asientos, opts) {
+    var ignorar = (opts && opts.ignorar) || function () { return false; };
     var descMs = (Number(cfg.descensoMin) || 0) * 60000;
     var desbMs = (Number(cfg.desbloqueoSeg) || 0) * 1000;
     var alternar = cfg.modo === 'alternar';
@@ -103,6 +105,10 @@ var PidLogic = (function () {
         return;
       }
       var hex = ev.hex;
+      if (ignorar(hex)) {
+        log.push({ t: ev.t, hex: hex, accion: 'conductor' });
+        return;
+      }
       var st = tarjetas[hex] || (tarjetas[hex] = { abordo: false, ultimo: null, ascenso: null, asiento: null });
       if (st.ultimo != null && ev.t - st.ultimo < desbMs) {
         log.push({ t: ev.t, hex: hex, accion: 'bloqueada', asiento: st.asiento });

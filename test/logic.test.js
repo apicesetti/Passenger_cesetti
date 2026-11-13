@@ -61,3 +61,11 @@ for (const [tipo, n] of [['camioneta', 4], ['camioneta', 3], ['combi', 15], ['co
 assert.strictEqual(L.normHex('00 00 00 8c 9a 8c 13'), '8C9A8C13');
 assert.strictEqual(L.normHex('04A1B2C3D4E5F6'), '04A1B2C3D4E5F6');
 console.log('logic: OK');
+
+// Llave de conductor: no ocupa asiento
+{
+  const r2 = L.procesar([{ t: 1, tipo: 'tarjeta', hex: '047AEB8A777A80' }, { t: 2, tipo: 'tarjeta', hex: 'AABBCCDD' }], cfg, 4, { ignorar: (h) => h === '047AEB8A777A80' });
+  assert.deepStrictEqual(r2.abordo.map((a) => [a.hex, a.asiento]), [['AABBCCDD', 1]]);
+  assert.strictEqual(r2.log[0].accion, 'conductor');
+  console.log('logic conductor: OK');
+}

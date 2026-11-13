@@ -6,7 +6,8 @@ geotab.addin.asientosPid = function () {
   var XLSX_URL = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
   var TIPOS = { camioneta: 'Camioneta', combi: 'Combi', colectivo: 'Colectivo' };
   var ASIENTOS_DEF = { camioneta: 4, combi: 15, colectivo: 45 };
-  var CFG_DEF = { descensoMin: 30, desbloqueoSeg: 60, modo: 'pid', resetIgnicion: false, ventanaHoras: 12, refrescoSeg: 5 };
+  var CFG_DEF = { descensoMin: 30, desbloqueoSeg: 60, modo: 'pid', resetIgnicion: false, ventanaHoras: 12, refrescoSeg: 5, sonidoAlertas: true, ignorados: [], pidIoxType: 4247 };
+  var ROLES = { pasajero: 'Pasajero', conductor: 'Conductor' };
 
   var api = null;
   var root = null;
@@ -23,7 +24,16 @@ geotab.addin.asientosPid = function () {
     ignOff: {},                // deviceId -> [t]
     conductores: {},           // deviceId -> userId
     usuarios: {},              // userId -> nombre
-    usuariosTarjeta: {},       // hex -> {userId, nombre, legajo} (usuarios de Geotab con llave)
+    usuariosTarjeta: {},       // hex -> {userId, nombre, usuario, legajo, tipoLlave}
+    usuariosGeo: {},           // userId -> {id, nombre, usuario, legajo, keys:[{hex, tipo}]}
+    lectores: {},              // deviceId -> fecha de conexión del IOX del PID
+    personas: {},              // userId -> {id, d:{tipo:'persona', userId, rol, habilitado, motivo, vence, vehiculos}}
+    alertasVistas: {},         // clave -> true (ya notificadas)
+    alertasIniciadas: false,
+    alertasAbiertas: false,
+    filtroRol: '',
+    filtroHab: '',
+    selPersonas: {},
     usuariosLeidos: 0,         // timestamp de la última lectura de usuarios
     condLeidos: 0,
     ignLeida: 0,
@@ -105,14 +115,26 @@ geotab.addin.asientosPid = function () {
 
   function cargarAddInData() {
     return call('Get', { typeName: 'AddInData', search: { addInId: ADDIN_ID } }).then(function (recs) {
-      S.pasajeros = {}; S.vehiculos = {}; S.cfgRec = null; S.cfg = Object.assign({}, CFG_DEF);
+      S.pasajeros = {}; S.vehiculos = {}; S.personas = {}; S.cfgRec = null; S.cfg = Object.assign({}, CFG_DEF);
       (recs || []).forEach(function (r) {
         var d = detalles(r);
         if (d.tipo === 'pasajero' && d.hex) S.pasajeros[PidLogic.normHex(d.hex)] = { id: r.id, d: d };
         else if (d.tipo === 'vehiculo' && d.deviceId) S.vehiculos[d.deviceId] = { id: r.id, d: d };
+        else if (d.tipo === 'persona' && d.userId) S.personas[d.userId] = { id: r.id, d: d };
         else if (d.tipo === 'config') { S.cfgRec = { id: r.id }; S.cfg = Object.assign({}, CFG_DEF, d.valores || {}); }
       });
     });
+  }
+
+  /* Vehículos con el lector PID conectado: IOX de tipo pidIoxType (4247) en IoxAddOn. */
+  function cargarLectores() {
+    return call('Get', { typeName: 'IoxAddOn' }).then(function (rs) {
+      var tipo = Number(S.cfg.pidIoxType) || 4247;
+      S.lectores = {};
+      (rs || []).forEach(function (x) {
+        if (Number(x.type) === tipo && x.device && x.device.id) S.lectores[x.device.id] = new Date(x.dateTime).getTime();
+      });
+    }).catch(function () { S.lectores = {}; });
   }
 
   function cargarDevices() {
@@ -126,39 +148,77 @@ geotab.addin.asientosPid = function () {
     });
   }
 
-  /* Usuarios de Geotab con llaves: el serialNumber de la llave es el hex de la tarjeta RFID. */
+  /* Usuarios de MyGeotab (conductores, que son los que pueden tener llaves). El serialNumber de
+     cada llave es el hex de la tarjeta o llavero. El rol (conductor/pasajero) y la habilitación
+     se guardan en AddInData. */
   function cargarUsuariosTarjeta() {
     return call('Get', {
       typeName: 'User',
       search: { isDriver: true, fromDate: new Date().toISOString() },
       propertySelector: { fields: ['id', 'name', 'firstName', 'lastName', 'employeeNo', 'keys'], isIncluded: true }
     }).then(function (us) {
-      var mapa = {};
+      var geo = {}, mapa = {};
       (us || []).forEach(function (u) {
+        var g = {
+          id: u.id,
+          nombre: ((u.firstName || '') + ' ' + (u.lastName || '')).trim() || u.name,
+          usuario: u.name,
+          legajo: u.employeeNo || '',
+          keys: []
+        };
         (u.keys || []).forEach(function (k) {
           var hex = PidLogic.normHex(k && k.serialNumber);
           if (hex.length < 8) return;
-          mapa[hex] = {
-            userId: u.id,
-            nombre: ((u.firstName || '') + ' ' + (u.lastName || '')).trim() || u.name,
-            usuario: u.name,
-            legajo: u.employeeNo || '',
-            tipoLlave: k.driverKeyType || ''
-          };
+          g.keys.push({ hex: hex, tipo: k.driverKeyType || '' });
+          mapa[hex] = { userId: u.id, nombre: g.nombre, usuario: g.usuario, legajo: g.legajo, tipoLlave: k.driverKeyType || '' };
         });
+        geo[u.id] = g;
       });
+      S.usuariosGeo = geo;
       S.usuariosTarjeta = mapa;
       S.usuariosLeidos = Date.now();
     });
   }
 
+  /* Rol de un usuario de Geotab: el guardado en el add-in o, si no hay, se deduce de sus llaves
+     (llave personalizada = tarjeta de pasajero; NFC u otra = conductor). */
+  function rolUsuario(userId) {
+    var p = S.personas[userId];
+    if (p && p.d.rol) return p.d.rol;
+    var g = S.usuariosGeo[userId];
+    if (g && g.keys.some(function (k) { return /custom/i.test(k.tipo); })) return 'pasajero';
+    return 'conductor';
+  }
+  function habUsuario(userId) {
+    var p = S.personas[userId];
+    return p ? p.d : {};
+  }
+
   /* Quién es una tarjeta: primero el usuario de Geotab con esa llave, si no el padrón del add-in. */
   function persona(hex) {
     var u = S.usuariosTarjeta[hex];
-    if (u) return { nombre: u.nombre, legajo: u.legajo, origen: 'geotab', userId: u.userId, usuario: u.usuario };
+    if (u) return { nombre: u.nombre, legajo: u.legajo, origen: 'geotab', userId: u.userId, usuario: u.usuario, rol: rolUsuario(u.userId), hab: habUsuario(u.userId) };
     var p = S.pasajeros[hex];
-    if (p) return { nombre: p.d.nombre, legajo: p.d.legajo, empresa: p.d.empresa, turno: p.d.turno, origen: 'padron' };
+    if (p) return { nombre: p.d.nombre, legajo: p.d.legajo, empresa: p.d.empresa, turno: p.d.turno, origen: 'padron', rol: 'pasajero', hab: p.d };
     return null;
+  }
+
+  function finDelDia(fecha) { return new Date(fecha + 'T23:59:59.999').getTime(); }
+
+  /* Devuelve null si la persona puede subir a ese vehículo en ese momento, o el motivo si no. */
+  function motivoNoHabilitado(p, devId, t) {
+    if (!p) return null;
+    var h = p.hab || {};
+    if (h.habilitado === false || h.activo === false) return 'Inhabilitado' + (h.motivo ? ': ' + h.motivo : '');
+    if (h.vence && t > finDelDia(h.vence)) return 'Habilitación vencida el ' + h.vence.split('-').reverse().join('/') + (h.motivo ? ' (' + h.motivo + ')' : '');
+    if (h.vehiculos && h.vehiculos.length && h.vehiculos.indexOf(devId) < 0) return 'No habilitado para este vehículo';
+    return null;
+  }
+
+  function esIgnorada(hex) {
+    if ((S.cfg.ignorados || []).indexOf(hex) >= 0) return true;
+    var p = persona(hex);
+    return !!(p && p.rol === 'conductor');
   }
 
   /* ---------- datos en vivo ---------- */
@@ -241,7 +301,7 @@ geotab.addin.asientosPid = function () {
       })
       .then(function () { S.actualizado = Date.now(); S.error = null; })
       .catch(function (e) { S.error = errMsg(e); })
-      .then(function () { cargando = false; renderVivo(); });
+      .then(function () { cargando = false; procesarAlertas(); renderVivo(); });
   }
 
   function estadoVehiculo(devId) {
@@ -249,11 +309,28 @@ geotab.addin.asientosPid = function () {
     var asientos = v ? Number(v.d.asientos) || 0 : 0;
     var evs = (S.lecturas[devId] || []).slice();
     (S.ignOff[devId] || []).forEach(function (t) { evs.push({ t: t, tipo: 'ign_off' }); });
-    var r = PidLogic.procesar(evs, S.cfg, asientos);
+    var r = PidLogic.procesar(evs, S.cfg, asientos, { ignorar: esIgnorada });
     r.asientos = asientos;
     r.desconocidas = r.abordo.filter(function (a) { return !persona(a.hex); }).length;
+    r.alertas = alertasDe(devId, r);
     r.ultima = evs.length ? Math.max.apply(null, evs.map(function (e) { return e.t; })) : null;
     return r;
+  }
+
+  /* Alertas activas de un vehículo: capacidad superada, persona no habilitada y tarjeta desconocida. */
+  function alertasDe(devId, r) {
+    var out = [];
+    var tExc = {};
+    r.log.forEach(function (l) { if (l.accion === 'excedido') tExc[l.hex] = l.t; });
+    r.abordo.forEach(function (a) {
+      var p = persona(a.hex);
+      var nom = p ? p.nombre : 'Tarjeta ' + a.hex;
+      if (!a.asiento) out.push({ clave: devId + '|cap|' + a.hex + '|' + a.desde, nivel: 'alta', dev: devId, hex: a.hex, t: tExc[a.hex] || a.desde, texto: 'Capacidad superada: ' + nom + ' subió sin asiento libre (' + r.asientos + ' asientos)' });
+      var mot = motivoNoHabilitado(p, devId, a.desde);
+      if (mot) out.push({ clave: devId + '|hab|' + a.hex + '|' + a.desde, nivel: 'alta', dev: devId, hex: a.hex, t: a.desde, texto: nom + ' no está habilitado: ' + mot });
+      if (!p) out.push({ clave: devId + '|desc|' + a.hex + '|' + a.desde, nivel: 'media', dev: devId, hex: a.hex, t: a.desde, texto: 'Tarjeta sin registrar ' + a.hex });
+    });
+    return out;
   }
 
   function nombrePas(hex) {
@@ -269,9 +346,86 @@ geotab.addin.asientosPid = function () {
     return u ? (S.usuarios[u] || '…') : null;
   }
 
+  /* ---------- alertas ---------- */
+  function alertasActivas() {
+    var out = [];
+    Object.keys(S.vehiculos).forEach(function (id) { out = out.concat(estadoVehiculo(id).alertas); });
+    return out.sort(function (a, b) { return (a.nivel === 'alta' ? 0 : 1) - (b.nivel === 'alta' ? 0 : 1) || b.t - a.t; });
+  }
+
+  function beep() {
+    try {
+      var Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      var ctx = new Ctx(), o = ctx.createOscillator(), g = ctx.createGain();
+      o.type = 'square'; o.frequency.value = 880; g.gain.value = 0.06;
+      o.connect(g); g.connect(ctx.destination); o.start();
+      setTimeout(function () { o.frequency.value = 660; }, 180);
+      setTimeout(function () { o.stop(); ctx.close(); }, 420);
+    } catch (e) { /* sin audio */ }
+  }
+
+  /* Notifica una sola vez cada alerta nueva. Las que ya estaban al abrir el add-in no suenan. */
+  function procesarAlertas() {
+    var act = alertasActivas();
+    var nuevas = act.filter(function (a) { return !S.alertasVistas[a.clave]; });
+    nuevas.forEach(function (a) { S.alertasVistas[a.clave] = true; });
+    if (!S.alertasIniciadas) { S.alertasIniciadas = true; return; }
+    var importantes = nuevas.filter(function (a) { return a.nivel === 'alta'; });
+    if (!importantes.length) return;
+    importantes.forEach(function (a) {
+      var d = S.devices[a.dev] || {};
+      var titulo = (d.licensePlate || d.name || a.dev);
+      toast('⚠ ' + titulo + ': ' + a.texto, 'err');
+      if (window.Notification && Notification.permission === 'granted') {
+        try { new Notification('Alerta de pasajeros · ' + titulo, { body: a.texto, tag: a.clave }); } catch (e) { /* nada */ }
+      }
+    });
+    if (S.cfg.sonidoAlertas !== false) beep();
+    S.alertasAbiertas = true;
+  }
+
+  function renderAlertas() {
+    var el = $('#ap-alertas');
+    if (!el) return;
+    var act = alertasActivas();
+    var altas = act.filter(function (a) { return a.nivel === 'alta'; });
+    var desc = act.length - altas.length;
+    var pedir = window.Notification && Notification.permission === 'default';
+    var linkNotif = pedir ? '<button class="ap-link" id="ap-notif">Activar avisos del navegador</button>' : '';
+    var html = '';
+    if (altas.length) {
+      html += '<div class="ap-alertbar alta"><div class="ap-alert-head"><b>⚠ ' + altas.length + ' alerta' + (altas.length > 1 ? 's' : '') + '</b>' +
+        '<span class="grow">' + esc(altas[0].texto) + (altas.length > 1 ? ' y ' + (altas.length - 1) + ' más' : '') + '</span>' + linkNotif +
+        '<button id="ap-alert-tg">' + (S.alertasAbiertas ? 'Ocultar' : 'Ver') + '</button></div>' +
+        (S.alertasAbiertas ? '<div class="ap-alert-list">' + altas.map(function (a) {
+          var d = S.devices[a.dev] || {};
+          return '<div class="ap-row"><b>' + esc(d.licensePlate || d.name || a.dev) + '</b><span class="grow">' + esc(a.texto) + '</span><span class="muted">' + hora(a.t) + '</span>' +
+            '<button data-ir="' + esc(a.dev) + '">Ver vehículo</button></div>';
+        }).join('') + '</div>' : '') + '</div>';
+      linkNotif = '';
+    }
+    if (desc) {
+      html += '<div class="ap-alertbar media"><div class="ap-alert-head"><span class="grow">' + desc + ' tarjeta' + (desc > 1 ? 's' : '') + ' sin registrar a bordo.</span>' + linkNotif +
+        '<button class="ap-link" data-go-personas>Registrar o ignorar</button></div></div>';
+      linkNotif = '';
+    }
+    if (linkNotif) html = '<div class="ap-notif">' + linkNotif + '</div>';
+    el.innerHTML = html;
+    var tg = $('#ap-alert-tg');
+    if (tg) tg.onclick = function () { S.alertasAbiertas = !S.alertasAbiertas; renderAlertas(); };
+    el.querySelectorAll('[data-ir]').forEach(function (b) {
+      b.onclick = function () { S.sel = b.getAttribute('data-ir'); S.vista = 'detalle'; render(); };
+    });
+    var gp = el.querySelector('[data-go-personas]');
+    if (gp) gp.onclick = function () { S.vista = 'pasajeros'; render(); };
+    var n = $('#ap-notif');
+    if (n) n.onclick = function () { Notification.requestPermission().then(renderAlertas); };
+  }
+
   /* ---------- render ---------- */
   function render() {
-    var tabs = [['flota', 'Flota'], ['historial', 'Historial'], ['pasajeros', 'Pasajeros'], ['vehiculos', 'Vehículos'], ['config', 'Configuración']];
+    var tabs = [['flota', 'Flota'], ['historial', 'Historial'], ['pasajeros', 'Personas'], ['vehiculos', 'Vehículos'], ['config', 'Configuración']];
     var activa = S.vista === 'detalle' ? 'flota' : S.vista;
     root.innerHTML =
       '<div class="ap-head"><div class="ap-title">Mapa de asientos</div>' +
@@ -279,6 +433,7 @@ geotab.addin.asientosPid = function () {
         return '<button data-tab="' + t[0] + '" class="' + (t[0] === activa ? 'on' : '') + '">' + t[1] + '</button>';
       }).join('') + '</nav>' +
       '<div class="ap-status" id="ap-status"></div></div>' +
+      '<div id="ap-alertas"></div>' +
       '<div id="ap-body"></div>';
     if (S.vista !== 'detalle') Mapa.cerrar();
     root.querySelectorAll('[data-tab]').forEach(function (b) {
@@ -291,6 +446,7 @@ geotab.addin.asientosPid = function () {
     else if (S.vista === 'historial') renderHistorial();
     else renderConfig();
     renderStatus();
+    renderAlertas();
   }
 
   function renderStatus() {
@@ -303,6 +459,7 @@ geotab.addin.asientosPid = function () {
   /* Re-render liviano tras cada refresco: solo las vistas en vivo y sin pisar inputs con foco. */
   function renderVivo() {
     renderStatus();
+    renderAlertas();
     if (S.vista === 'flota') renderFlotaLista();
     else if (S.vista === 'detalle') renderDetalle();
   }
@@ -330,6 +487,7 @@ geotab.addin.asientosPid = function () {
     var sinConfig = Object.keys(S.lecturas).filter(function (id) {
       return !S.vehiculos[id] && S.lecturas[id].some(function (x) { return x.tipo === 'tarjeta'; });
     });
+    Object.keys(S.lectores).forEach(function (id) { if (!S.vehiculos[id] && sinConfig.indexOf(id) < 0 && S.devices[id]) sinConfig.push(id); });
 
     var html = '';
     if (!Object.keys(S.vehiculos).length) {
@@ -338,7 +496,7 @@ geotab.addin.asientosPid = function () {
       html += '<div class="ap-empty">Ningún vehículo coincide con la búsqueda.</div>';
     }
     if (sinConfig.length) {
-      html += '<div class="ap-warn">' + sinConfig.length + ' vehículo(s) con lecturas de tarjetas sin configurar: ' +
+      html += '<div class="ap-warn">' + sinConfig.length + ' vehículo(s) con lector PID o lecturas de tarjetas sin configurar: ' +
         sinConfig.map(function (id) { return esc(nombreDev(id)); }).join(', ') + '. <a href="#" data-go="vehiculos">Configurar</a></div>';
     }
     html += '<div class="ap-grid">' + ids.map(function (id) {
@@ -348,15 +506,17 @@ geotab.addin.asientosPid = function () {
       var n = e.abordo.length;
       var pct = e.asientos ? Math.min(100, Math.round(n / e.asientos * 100)) : 0;
       var cls = e.excedidos.length ? 'red' : (n ? 'green' : '');
+      var altas = e.alertas.filter(function (a) { return a.nivel === 'alta'; }).length;
       var cond = nombreConductor(id);
-      return '<button class="ap-card" data-dev="' + esc(id) + '">' +
+      return '<button class="ap-card' + (altas ? ' alerta' : '') + '" data-dev="' + esc(id) + '">' +
         '<div class="ap-card-top"><span class="ap-plate">' + esc(d.licensePlate || '—') + '</span><span class="ap-tag">' + esc(TIPOS[v.clase] || v.clase) + '</span></div>' +
         '<div class="ap-card-name">' + esc(d.name) + '</div>' +
         '<div class="ap-occ"><b>' + n + '</b> / ' + e.asientos + '</div>' +
         '<div class="ap-bar-bg"><div class="ap-bar-fg ' + cls + '" style="width:' + pct + '%"></div></div>' +
         '<div class="ap-card-foot">' + (cond ? 'Conductor: ' + esc(cond) : 'Sin conductor') +
         (e.desconocidas ? ' · <span class="amber">' + e.desconocidas + ' sin registrar</span>' : '') +
-        (e.excedidos.length ? ' · <span class="red">' + e.excedidos.length + ' sin asiento</span>' : '') + '</div>' +
+        (e.excedidos.length ? ' · <span class="red">' + e.excedidos.length + ' sin asiento</span>' : '') +
+        (altas ? '<div class="ap-card-alert">⚠ ' + altas + ' alerta' + (altas > 1 ? 's' : '') + '</div>' : '') + '</div>' +
         '</button>';
     }).join('') + '</div>';
     cont.innerHTML = html;
@@ -392,8 +552,9 @@ geotab.addin.asientosPid = function () {
           if (!a) { cls = 'free'; txt = celda; tip = 'Asiento ' + celda + ' libre'; }
           else {
             var nom = nombrePas(a.hex);
-            cls = nom ? 'occ' : 'unk'; txt = nom ? iniciales(nom) : '?';
-            tip = 'Asiento ' + celda + ': ' + (nom || 'tarjeta sin registrar') + ' (' + a.hex + ') desde ' + hora(a.desde);
+            var mot = motivoNoHabilitado(persona(a.hex), S.sel, a.desde);
+            cls = nom ? (mot ? 'nohab' : 'occ') : 'unk'; txt = nom ? iniciales(nom) : '?';
+            tip = 'Asiento ' + celda + ': ' + (nom || 'tarjeta sin registrar') + ' (' + a.hex + ') desde ' + hora(a.desde) + (mot ? ' — ' + mot : '');
           }
         }
         s += '<g class="ap-seat ' + cls + '" data-seat="' + esc(celda) + '"><title>' + esc(tip) + '</title>' +
@@ -407,7 +568,8 @@ geotab.addin.asientosPid = function () {
   var ACCIONES = {
     sube: ['↗', 'subió', 'green'], baja: ['↙', 'bajó', ''], reascenso: ['↻', 'volvió a marcar (sigue a bordo)', ''],
     excedido: ['!', 'subió sin asiento libre', 'red'], reubicado: ['→', 'pasó a asiento', 'green'],
-    bloqueada: ['·', 'lectura repetida ignorada', 'muted'], vaciado: ['↙', 'bajó (motor apagado)', '']
+    bloqueada: ['·', 'lectura repetida ignorada', 'muted'], vaciado: ['↙', 'bajó (motor apagado)', ''],
+    conductor: ['·', 'pasó su llave de conductor por el lector (no ocupa asiento)', 'muted']
   };
 
   function renderDetalle() {
@@ -426,11 +588,13 @@ geotab.addin.asientosPid = function () {
       body.setAttribute('data-detalle', id);
       body.innerHTML =
         '<div class="ap-bar"><button id="ap-back">← Flota</button><div class="grow"><b>' + esc(d.licensePlate || '') + '</b> ' + esc(d.name) +
-        ' <span class="ap-tag">' + esc(TIPOS[v.d.clase] || v.d.clase) + '</span></div></div>' +
+        ' <span class="ap-tag">' + esc(TIPOS[v.d.clase] || v.d.clase) + '</span>' +
+        (S.lectores[id] ? ' <span class="ap-tag geo">Lector PID conectado desde ' + esc(fechaHora(S.lectores[id])) + '</span>' : ' <span class="ap-pill media">No se detecta el lector PID en este GO</span>') +
+        '</div></div>' +
         '<div class="ap-detail"><div class="ap-col">' +
         '<div class="ap-metrics" id="ap-d-metrics"></div>' +
         '<div class="ap-plano" id="ap-d-plano"></div>' +
-        '<div class="ap-legend"><span><i class="sw occ"></i>Pasajero</span><span><i class="sw unk"></i>Sin registrar</span><span><i class="sw drv"></i>Conductor</span><span><i class="sw free"></i>Libre</span></div>' +
+        '<div class="ap-legend"><span><i class="sw occ"></i>Pasajero</span><span><i class="sw nohab"></i>No habilitado</span><span><i class="sw unk"></i>Sin registrar</span><span><i class="sw drv"></i>Conductor</span><span><i class="sw free"></i>Libre</span></div>' +
         '<div id="ap-d-warn"></div>' +
         '<h4>Recorrido</h4><div class="ap-map-wrap"><div id="ap-map"></div><div class="ap-map-msg" id="ap-map-msg">Cargando mapa…</div></div>' +
         '<div class="ap-legend"><span><i class="sw ruta"></i>Últimas ' + esc(S.cfg.ventanaHoras) + ' h</span><span><i class="dot up"></i>Subida</span><span><i class="dot down"></i>Bajada</span><span><i class="dot veh"></i>Posición actual</span></div>' +
@@ -457,8 +621,10 @@ geotab.addin.asientosPid = function () {
 
     $('#ap-d-abordo').innerHTML = e.abordo.map(function (a) {
       var nom = nombrePas(a.hex);
-      return '<div class="ap-row"><span class="ap-num ' + (a.asiento ? (nom ? 'green' : 'amber') : 'red') + '">' + (a.asiento || '—') + '</span>' +
-        '<span class="grow">' + (nom ? esc(nom) : '<span class="amber">Tarjeta sin registrar</span>') + ' <span class="muted mono">' + esc(a.hex) + '</span></span>' +
+      var mot = motivoNoHabilitado(persona(a.hex), id, a.desde);
+      return '<div class="ap-row"><span class="ap-num ' + (a.asiento ? (nom ? (mot ? 'red' : 'green') : 'amber') : 'red') + '">' + (a.asiento || '—') + '</span>' +
+        '<span class="grow">' + (nom ? esc(nom) : '<span class="amber">Tarjeta sin registrar</span>') + ' <span class="muted mono">' + esc(a.hex) + '</span>' +
+        (mot ? '<br><span class="red">⚠ ' + esc(mot) + '</span>' : '') + (a.asiento ? '' : '<br><span class="red">⚠ Sin asiento: capacidad superada</span>') + '</span>' +
         '<span class="muted">' + hora(a.desde) + '</span>' +
         (nom ? '' : '<button class="ap-link" data-reg="' + esc(a.hex) + '">Registrar</button>') + '</div>';
     }).join('') || '<div class="ap-empty">Nadie a bordo.</div>';
@@ -632,62 +798,198 @@ geotab.addin.asientosPid = function () {
       .sort(function (a, b) { return b.t - a.t; });
   }
 
+  /* Una fila por usuario de MyGeotab + una por cada persona del padrón del add-in. */
+  function filasPersonas() {
+    var filas = Object.keys(S.usuariosGeo).map(function (uid) {
+      var g = S.usuariosGeo[uid];
+      return { key: 'u:' + uid, origen: 'geotab', userId: uid, nombre: g.nombre, usuario: g.usuario, legajo: g.legajo, keys: g.keys,
+        rol: rolUsuario(uid), rolGuardado: !!(S.personas[uid] && S.personas[uid].d.rol), hab: habUsuario(uid) };
+    });
+    Object.keys(S.pasajeros).forEach(function (h) {
+      var d = S.pasajeros[h].d;
+      filas.push({ key: 'p:' + h, origen: 'padron', hex: h, nombre: d.nombre, legajo: d.legajo, empresa: d.empresa, turno: d.turno,
+        keys: [{ hex: h, tipo: 'Padrón' }], rol: 'pasajero', hab: d, pisado: !!S.usuariosTarjeta[h] });
+    });
+    return filas;
+  }
+
+  function estadoHab(f) {
+    var h = f.hab || {};
+    if (h.habilitado === false || h.activo === false) return { cls: 'alta', txt: 'Inhabilitado', tip: h.motivo || '' };
+    if (h.vence && Date.now() > finDelDia(h.vence)) return { cls: 'alta', txt: 'Vencido ' + h.vence.split('-').reverse().join('/'), tip: h.motivo || '' };
+    var extra = [];
+    if (h.vence) extra.push('hasta ' + h.vence.split('-').reverse().join('/'));
+    if (h.vehiculos && h.vehiculos.length) extra.push(h.vehiculos.length + ' vehículo' + (h.vehiculos.length > 1 ? 's' : ''));
+    return { cls: 'ok', txt: 'Habilitado' + (extra.length ? ' · ' + extra.join(' · ') : ''), tip: h.motivo || '' };
+  }
+
   function renderPasajeros() {
     var q = S.filtroPas.trim().toLowerCase();
-    var filas = Object.keys(S.usuariosTarjeta).map(function (h) {
-      var u = S.usuariosTarjeta[h];
-      return { hex: h, nombre: u.nombre, legajo: u.legajo, empresa: '', turno: '', activo: true, origen: 'geotab', userId: u.userId, usuario: u.usuario };
-    }).concat(Object.keys(S.pasajeros).map(function (h) {
-      var d = S.pasajeros[h].d;
-      return { hex: h, nombre: d.nombre, legajo: d.legajo, empresa: d.empresa, turno: d.turno, activo: d.activo !== false, origen: 'padron', pisado: !!S.usuariosTarjeta[h] };
-    }));
-    var nGeotab = Object.keys(S.usuariosTarjeta).length, nPadron = Object.keys(S.pasajeros).length;
-    var lista = filas.filter(function (f) {
+    var todas = filasPersonas();
+    var lista = todas.filter(function (f) {
+      if (S.filtroRol && f.rol !== S.filtroRol) return false;
+      if (S.filtroHab === 'no' && estadoHab(f).cls !== 'alta') return false;
+      if (S.filtroHab === 'si' && estadoHab(f).cls === 'alta') return false;
+      if (S.filtroHab === 'llave' && !f.keys.length) return false;
       if (!q) return true;
-      return [f.hex, f.nombre, f.legajo, f.empresa, f.turno, f.usuario].join(' ').toLowerCase().indexOf(q) >= 0;
+      return [f.nombre, f.usuario, f.legajo, f.empresa, f.keys.map(function (k) { return k.hex; }).join(' ')].join(' ').toLowerCase().indexOf(q) >= 0;
     }).sort(function (a, b) { return String(a.nombre).localeCompare(String(b.nombre)); });
+    var mostrar = lista.slice(0, 400);
+    var nPas = todas.filter(function (f) { return f.rol === 'pasajero'; }).length;
+    var nCond = todas.length - nPas;
     var sinReg = tarjetasSinRegistrar();
+    var nSel = Object.keys(S.selPersonas).length;
 
     $('#ap-body').innerHTML =
-      (sinReg.length ? '<div class="ap-warn"><b>Tarjetas leídas sin registrar</b><div class="ap-chips">' + sinReg.map(function (s) {
-        return '<button class="ap-chip" data-reg="' + esc(s.hex) + '">' + esc(s.hex) + ' <span class="muted">' + esc(nombreDev(s.dev)) + ' ' + hora(s.t) + '</span></button>';
-      }).join('') + '</div></div>' : '') +
-      '<div class="ap-bar"><input id="ap-qp" type="search" class="grow" placeholder="Buscar nombre, legajo, hex…" value="' + esc(S.filtroPas) + '">' +
-      '<button id="ap-new" class="primary">+ Pasajero</button><button id="ap-imp">Importar Excel</button><input id="ap-file" type="file" accept=".xlsx,.xls,.csv" hidden></div>' +
-      '<div class="ap-muted-line">' + (nGeotab + nPadron) + ' tarjetas identificadas: ' + nGeotab + ' por usuarios de Geotab con llave, ' + nPadron + ' en el padrón del add-in</div>' +
-      '<table class="ap-table"><thead><tr><th>Hex tarjeta</th><th>Nombre</th><th>Legajo / DNI</th><th>Empresa</th><th>Turno</th><th>Origen</th><th></th></tr></thead><tbody>' +
-      (lista.map(function (f) {
-        var origen = f.origen === 'geotab'
-          ? '<span class="ap-tag geo">Usuario Geotab</span>'
-          : '<span class="ap-tag">Padrón</span>' + (f.pisado ? ' <span class="muted" title="Hay un usuario de Geotab con esta llave; se usa el usuario.">(reemplazado)</span>' : '') + (f.activo ? '' : ' <span class="muted">inactivo</span>');
-        var acciones = f.origen === 'geotab'
-          ? '<a class="ap-link" href="#user,id:' + encodeURIComponent(f.userId) + '" target="_top">Ver usuario</a>'
-          : '<button data-edit="' + esc(f.hex) + '">Editar</button><button class="danger" data-del="' + esc(f.hex) + '">Borrar</button>';
-        return '<tr><td class="mono">' + esc(f.hex) + '</td><td>' + esc(f.nombre) + (f.usuario && f.usuario !== f.nombre ? ' <span class="muted">' + esc(f.usuario) + '</span>' : '') + '</td><td>' + esc(f.legajo) + '</td><td>' + esc(f.empresa) + '</td><td>' + esc(f.turno) + '</td>' +
-          '<td>' + origen + '</td><td class="ap-actions">' + acciones + '</td></tr>';
-      }).join('') || '<tr><td colspan="7" class="ap-empty">Sin pasajeros.</td></tr>') +
+      (sinReg.length ? '<div class="ap-warn"><b>' + sinReg.length + ' tarjeta' + (sinReg.length > 1 ? 's' : '') + ' leída' + (sinReg.length > 1 ? 's' : '') + ' sin registrar</b> — tocá una para cargarla en el padrón, o ignorala si es una llave de conductor sin usuario. Para que sea un usuario, cargá el hex como llave personalizada en MyGeotab.<div class="ap-chips">' + sinReg.slice(0, 12).map(function (x) {
+        return '<span class="ap-chipg"><button class="ap-chip" data-reg="' + esc(x.hex) + '">' + esc(x.hex) + ' <span class="muted">' + esc(nombreDev(x.dev)) + ' ' + hora(x.t) + '</span></button>' +
+          '<button class="ap-chip-x" data-ign="' + esc(x.hex) + '" title="Ignorar esta tarjeta (no ocupa asiento)">Ignorar</button></span>';
+      }).join('') + (sinReg.length > 12 ? '<span class="muted sm">y ' + (sinReg.length - 12) + ' más</span>' : '') + '</div></div>' : '') +
+      '<div class="ap-bar"><input id="ap-qp" type="search" class="grow" placeholder="Buscar nombre, usuario, legajo o hex…" value="' + esc(S.filtroPas) + '">' +
+      '<select id="ap-frol"><option value="">Todos los roles</option><option value="pasajero"' + (S.filtroRol === 'pasajero' ? ' selected' : '') + '>Pasajeros</option><option value="conductor"' + (S.filtroRol === 'conductor' ? ' selected' : '') + '>Conductores</option></select>' +
+      '<select id="ap-fhab"><option value="">Cualquier estado</option><option value="si"' + (S.filtroHab === 'si' ? ' selected' : '') + '>Habilitados</option><option value="no"' + (S.filtroHab === 'no' ? ' selected' : '') + '>No habilitados</option><option value="llave"' + (S.filtroHab === 'llave' ? ' selected' : '') + '>Con tarjeta o llave</option></select>' +
+      '<button id="ap-reload" title="Volver a leer los usuarios de MyGeotab">Actualizar usuarios</button>' +
+      '<button id="ap-new" class="primary">+ Pasajero sin usuario</button><button id="ap-imp">Importar Excel</button><input id="ap-file" type="file" accept=".xlsx,.xls,.csv" hidden></div>' +
+      '<div class="ap-muted-line">' + Object.keys(S.usuariosGeo).length + ' usuarios de MyGeotab y ' + Object.keys(S.pasajeros).length + ' en el padrón del add-in · ' + nPas + ' pasajeros, ' + nCond + ' conductores' +
+      (lista.length > mostrar.length ? ' · se muestran 400 de ' + lista.length + ', usá el buscador' : '') + '</div>' +
+      (nSel ? '<div class="ap-bulk"><b>' + nSel + ' seleccionado' + (nSel > 1 ? 's' : '') + '</b>' +
+        '<button data-bulk="pasajero">Marcar como pasajeros</button><button data-bulk="conductor">Marcar como conductores</button>' +
+        '<button data-bulk="hab">Habilitar</button><button class="danger" data-bulk="inhab">Inhabilitar…</button><button class="ap-link" data-bulk="none">Quitar selección</button></div>' : '') +
+      '<table class="ap-table"><thead><tr><th style="width:2rem"><input type="checkbox" id="ap-selall" title="Seleccionar los visibles"></th><th>Nombre</th><th>Tarjeta / llave</th><th style="width:9rem">Rol</th><th>Habilitación</th><th>Origen</th><th></th></tr></thead><tbody>' +
+      (mostrar.map(function (f) {
+        var eh = estadoHab(f);
+        var llaves = f.keys.length ? f.keys.map(function (k) {
+          return '<span class="mono">' + esc(k.hex) + '</span>' + (k.tipo && k.tipo !== 'Padrón' ? ' <span class="muted">' + esc(k.tipo) + '</span>' : '');
+        }).join('<br>') : '<span class="muted">Sin llave</span>';
+        var rol = f.origen === 'geotab'
+          ? '<select data-rol="' + esc(f.userId) + '">' + Object.keys(ROLES).map(function (r) { return '<option value="' + r + '"' + (f.rol === r ? ' selected' : '') + '>' + ROLES[r] + '</option>'; }).join('') + '</select>' +
+            (f.rolGuardado ? '' : '<div class="muted sm">automático</div>')
+          : 'Pasajero';
+        var acciones = '<button data-hab="' + esc(f.key) + '">Habilitación</button>' + (f.origen === 'geotab'
+          ? '<a class="ap-link" href="#user,id:' + encodeURIComponent(f.userId) + '" target="_top">Usuario</a>'
+          : '<button data-edit="' + esc(f.hex) + '">Editar</button><button class="danger" data-del="' + esc(f.hex) + '">Borrar</button>');
+        return '<tr' + (S.selPersonas[f.key] ? ' class="sel"' : '') + '><td><input type="checkbox" data-sel="' + esc(f.key) + '"' + (S.selPersonas[f.key] ? ' checked' : '') + '></td>' +
+          '<td>' + esc(f.nombre) + (f.usuario && f.usuario !== f.nombre ? '<div class="muted sm">' + esc(f.usuario) + '</div>' : '') + (f.legajo ? '<div class="muted sm">Legajo ' + esc(f.legajo) + '</div>' : '') + '</td>' +
+          '<td>' + llaves + '</td><td>' + rol + '</td>' +
+          '<td><span class="ap-pill ' + eh.cls + '" title="' + esc(eh.tip) + '">' + esc(eh.txt) + '</span>' + (eh.tip ? '<div class="muted sm">' + esc(eh.tip) + '</div>' : '') + '</td>' +
+          '<td>' + (f.origen === 'geotab' ? '<span class="ap-tag geo">MyGeotab</span>' : '<span class="ap-tag">Padrón</span>' + (f.pisado ? ' <span class="muted sm">(reemplazado por un usuario)</span>' : '')) + '</td>' +
+          '<td class="ap-actions">' + acciones + '</td></tr>';
+      }).join('') || '<tr><td colspan="7" class="ap-empty">Sin resultados.</td></tr>') +
       '</tbody></table>';
 
+    var refrescarLista = function (focoId) {
+      renderPasajeros();
+      if (focoId) { var nq = $(focoId); nq.focus(); if (nq.setSelectionRange) nq.setSelectionRange(nq.value.length, nq.value.length); }
+    };
     var qp = $('#ap-qp');
-    qp.oninput = function () {
-      S.filtroPas = qp.value; renderPasajeros();
-      var nq = $('#ap-qp'); nq.focus(); nq.setSelectionRange(nq.value.length, nq.value.length);
+    qp.oninput = function () { S.filtroPas = qp.value; refrescarLista('#ap-qp'); };
+    $('#ap-frol').onchange = function (ev) { S.filtroRol = ev.target.value; refrescarLista(); };
+    $('#ap-fhab').onchange = function (ev) { S.filtroHab = ev.target.value; refrescarLista(); };
+    $('#ap-reload').onclick = function () {
+      cargarUsuariosTarjeta().then(function () { toast('Usuarios actualizados'); renderPasajeros(); }).catch(function (e) { toast(errMsg(e), 'err'); });
     };
     $('#ap-new').onclick = function () { abrirFormPasajero(null, ''); };
     $('#ap-imp').onclick = function () { $('#ap-file').click(); };
     $('#ap-file').onchange = function (ev) { if (ev.target.files[0]) importarExcel(ev.target.files[0]); };
+    $('#ap-selall').onchange = function (ev) {
+      mostrar.forEach(function (f) { if (ev.target.checked) S.selPersonas[f.key] = true; else delete S.selPersonas[f.key]; });
+      renderPasajeros();
+    };
+    root.querySelectorAll('[data-sel]').forEach(function (c) {
+      c.onchange = function () { var k = c.getAttribute('data-sel'); if (c.checked) S.selPersonas[k] = true; else delete S.selPersonas[k]; renderPasajeros(); };
+    });
+    root.querySelectorAll('[data-rol]').forEach(function (sel) {
+      sel.onchange = function () {
+        guardarPersona(sel.getAttribute('data-rol'), { rol: sel.value })
+          .then(function () { toast('Rol actualizado'); renderPasajeros(); }).catch(function (e) { toast(errMsg(e), 'err'); });
+      };
+    });
+    root.querySelectorAll('[data-bulk]').forEach(function (b) {
+      b.onclick = function () { accionLote(b.getAttribute('data-bulk')); };
+    });
+    root.querySelectorAll('[data-hab]').forEach(function (b) { b.onclick = function () { abrirHabilitacion([b.getAttribute('data-hab')]); }; });
     root.querySelectorAll('[data-reg]').forEach(function (b) { b.onclick = function () { abrirFormPasajero(null, b.getAttribute('data-reg')); }; });
+    root.querySelectorAll('[data-ign]').forEach(function (b) {
+      b.onclick = function () {
+        var hex = b.getAttribute('data-ign');
+        confirmar('¿Ignorar la tarjeta ' + hex + '? No va a ocupar asiento ni generar alertas. Se puede revertir en Configuración.').then(function (ok) {
+          if (!ok) return;
+          var nv = Object.assign({}, S.cfg, { ignorados: (S.cfg.ignorados || []).concat([hex]) });
+          return guardarConfig(nv).then(function () { toast('Tarjeta ignorada'); renderPasajeros(); });
+        }).catch(function (e) { toast(errMsg(e), 'err'); });
+      };
+    });
     root.querySelectorAll('[data-edit]').forEach(function (b) { b.onclick = function () { abrirFormPasajero(S.pasajeros[b.getAttribute('data-edit')]); }; });
     root.querySelectorAll('[data-del]').forEach(function (b) {
       b.onclick = function () {
         var p = S.pasajeros[b.getAttribute('data-del')];
         if (!p) return;
-        confirmar('¿Borrar a ' + p.d.nombre + ' (' + p.d.hex + ')?').then(function (ok) {
+        confirmar('¿Borrar a ' + p.d.nombre + ' (' + p.d.hex + ') del padrón?').then(function (ok) {
           if (!ok) return;
           return borrarRec(p).then(function () { delete S.pasajeros[p.d.hex]; toast('Pasajero borrado'); renderPasajeros(); });
         }).catch(function (e) { toast(errMsg(e), 'err'); });
       };
     });
+  }
+
+  /* Guarda (o crea) el registro de rol y habilitación de un usuario de MyGeotab. */
+  function guardarPersona(userId, cambios) {
+    var rec = S.personas[userId];
+    var d = Object.assign({ tipo: 'persona', userId: userId, rol: rolUsuario(userId) }, rec ? rec.d : {}, cambios);
+    return guardarRec(rec, d).then(function (r) { S.personas[userId] = r; return r; });
+  }
+  function guardarHabPadron(hex, cambios) {
+    var rec = S.pasajeros[hex];
+    var d = Object.assign({}, rec.d, cambios);
+    return guardarRec(rec, d).then(function (r) { S.pasajeros[hex] = r; return r; });
+  }
+  function guardarHab(key, cambios) {
+    return key.indexOf('u:') === 0 ? guardarPersona(key.slice(2), cambios) : guardarHabPadron(key.slice(2), cambios);
+  }
+
+  function accionLote(accion) {
+    var keys = Object.keys(S.selPersonas);
+    if (accion === 'none') { S.selPersonas = {}; renderPasajeros(); return; }
+    if (accion === 'inhab') { abrirHabilitacion(keys, true); return; }
+    var tareas;
+    if (accion === 'pasajero' || accion === 'conductor') {
+      tareas = keys.filter(function (k) { return k.indexOf('u:') === 0; }).map(function (k) { return function () { return guardarPersona(k.slice(2), { rol: accion }); }; });
+    } else {
+      tareas = keys.map(function (k) { return function () { return guardarHab(k, { habilitado: true, activo: true, motivo: '', vence: '' }); }; });
+    }
+    if (!tareas.length) { toast('El rol solo se puede cambiar a usuarios de MyGeotab', 'err'); return; }
+    tareas.reduce(function (p, t) { return p.then(t); }, Promise.resolve())
+      .then(function () { S.selPersonas = {}; toast(tareas.length + ' persona(s) actualizadas'); renderPasajeros(); })
+      .catch(function (e) { toast(errMsg(e), 'err'); renderPasajeros(); });
+  }
+
+  /* Habilitación de una o varias personas: estado, motivo, vencimiento y vehículos permitidos. */
+  function abrirHabilitacion(keys, inhabilitar) {
+    if (!keys.length) return;
+    var filas = filasPersonas().filter(function (f) { return keys.indexOf(f.key) >= 0; });
+    var h = filas.length === 1 ? (filas[0].hab || {}) : {};
+    var hab = inhabilitar ? false : !(h.habilitado === false || h.activo === false);
+    var permitidos = h.vehiculos || [];
+    var vehs = Object.keys(S.vehiculos).sort(function (a, b) { return nombreDev(a).localeCompare(nombreDev(b)); });
+    modal(filas.length === 1 ? 'Habilitación · ' + filas[0].nombre : 'Habilitación · ' + filas.length + ' personas',
+      '<label class="chk"><input type="checkbox" name="hab"' + (hab ? ' checked' : '') + '> Habilitado para subir</label>' +
+      '<label>Motivo / observación<input name="motivo" value="' + esc(h.motivo || '') + '" placeholder="Inducción vencida, sin apto médico…"></label>' +
+      '<label>Habilitado hasta (opcional)<input type="date" name="vence" value="' + esc(h.vence || '') + '"></label>' +
+      '<label>Vehículos permitidos<select name="alcance"><option value="todos"' + (permitidos.length ? '' : ' selected') + '>Todos los vehículos</option><option value="algunos"' + (permitidos.length ? ' selected' : '') + '>Solo los elegidos</option></select></label>' +
+      '<div class="ap-vehlist" id="ap-vehlist"' + (permitidos.length ? '' : ' hidden') + '>' + (vehs.map(function (id) {
+        var d = S.devices[id] || {};
+        return '<label class="chk"><input type="checkbox" name="veh" value="' + esc(id) + '"' + (permitidos.indexOf(id) >= 0 ? ' checked' : '') + '> ' + esc((d.licensePlate ? d.licensePlate + ' · ' : '') + nombreDev(id)) + '</label>';
+      }).join('') || '<div class="muted">No hay vehículos configurados.</div>') + '</div>',
+      function (f) {
+        var alc = f.elements.alcance.value;
+        var veh = [].slice.call(f.querySelectorAll('input[name=veh]:checked')).map(function (c) { return c.value; });
+        if (alc === 'algunos' && !veh.length) throw new Error('Elegí al menos un vehículo.');
+        var cambios = { habilitado: f.elements.hab.checked, activo: f.elements.hab.checked, motivo: f.elements.motivo.value.trim(), vence: f.elements.vence.value, vehiculos: alc === 'algunos' ? veh : [] };
+        return keys.reduce(function (p, k) { return p.then(function () { return guardarHab(k, cambios); }); }, Promise.resolve())
+          .then(function () { S.selPersonas = {}; toast('Habilitación guardada'); render(); });
+      });
+    var form = root.querySelector('.ap-dialog form');
+    form.elements.alcance.onchange = function () { $('#ap-vehlist').hidden = form.elements.alcance.value !== 'algunos'; };
   }
 
   function confirmar(msg) {
@@ -731,7 +1033,7 @@ geotab.addin.asientosPid = function () {
       '<label>Legajo / DNI<input name="legajo" value="' + esc(d.legajo) + '"></label>' +
       '<label>Empresa / departamento<input name="empresa" value="' + esc(d.empresa) + '"></label>' +
       '<label>Turno<input name="turno" value="' + esc(d.turno) + '"></label>' +
-      '<label class="chk"><input type="checkbox" name="activo"' + (d.activo === false ? '' : ' checked') + '> Activo</label>',
+      '<small class="muted">La habilitación (inhabilitar, vencimiento, vehículos) se edita con el botón Habilitación de la lista.</small>',
       function (f) {
         var hex = PidLogic.normHex(f.elements.hex.value);
         var nombre = f.elements.nombre.value.trim();
@@ -740,7 +1042,7 @@ geotab.addin.asientosPid = function () {
         if (S.usuariosTarjeta[hex]) throw new Error('Esa tarjeta ya es la llave del usuario de Geotab ' + S.usuariosTarjeta[hex].usuario + '.');
         var existente = S.pasajeros[hex];
         if (existente && (!rec || existente.id !== rec.id)) throw new Error('Esa tarjeta ya está asignada a ' + existente.d.nombre + '.');
-        var nd = { tipo: 'pasajero', hex: hex, nombre: nombre, legajo: f.elements.legajo.value.trim(), empresa: f.elements.empresa.value.trim(), turno: f.elements.turno.value.trim(), activo: f.elements.activo.checked };
+        var nd = Object.assign({ activo: true }, rec ? rec.d : {}, { tipo: 'pasajero', hex: hex, nombre: nombre, legajo: f.elements.legajo.value.trim(), empresa: f.elements.empresa.value.trim(), turno: f.elements.turno.value.trim() });
         return guardarRec(rec, nd).then(function (r) {
           if (rec && rec.d.hex !== hex) delete S.pasajeros[rec.d.hex];
           S.pasajeros[hex] = r;
@@ -826,6 +1128,7 @@ geotab.addin.asientosPid = function () {
     var q = S.filtroVeh.trim().toLowerCase().replace(/\s+/g, '');
     var conLect = {};
     Object.keys(S.lecturas).forEach(function (id) { if (S.lecturas[id].some(function (x) { return x.tipo === 'tarjeta'; })) conLect[id] = 1; });
+    Object.keys(S.lectores).forEach(function (id) { conLect[id] = 1; });
     var ids = Object.keys(S.devices).filter(function (id) {
       var d = S.devices[id];
       if (!q) return S.vehiculos[id] || conLect[id];
@@ -836,14 +1139,14 @@ geotab.addin.asientosPid = function () {
 
     $('#ap-body').innerHTML =
       '<div class="ap-bar"><input id="ap-qv" type="search" class="grow" placeholder="Buscar patente, nombre o serie para agregar un vehículo" value="' + esc(S.filtroVeh) + '"></div>' +
-      '<div class="ap-muted-line">' + (q ? 'Resultados de la búsqueda' : 'Vehículos configurados y con lecturas del PID') + '</div>' +
+      '<div class="ap-muted-line">' + (q ? 'Resultados de la búsqueda' : 'Vehículos configurados y con el lector PID conectado (detectado por el IOX del GO)') + '</div>' +
       '<table class="ap-table"><thead><tr><th>Vehículo</th><th>Patente</th><th>Tipo</th><th>Asientos de pasajeros</th><th></th></tr></thead><tbody>' +
       (ids.map(function (id) {
         var d = S.devices[id];
         var v = S.vehiculos[id];
         var clase = v ? v.d.clase : 'combi';
         var asientos = v ? v.d.asientos : ASIENTOS_DEF[clase];
-        return '<tr data-row="' + esc(id) + '"><td>' + esc(d.name) + (conLect[id] ? ' <span class="ap-tag">PID</span>' : '') + '</td><td>' + esc(d.licensePlate || '') + '</td>' +
+        return '<tr data-row="' + esc(id) + '"><td>' + esc(d.name) + (S.lectores[id] ? ' <span class="ap-tag geo" title="IOX del lector conectado el ' + esc(fechaHora(S.lectores[id])) + '">Lector PID</span>' : (conLect[id] ? ' <span class="ap-tag">Lecturas PID</span>' : '')) + '</td><td>' + esc(d.licensePlate || '') + '</td>' +
           '<td><select data-k="clase">' + Object.keys(TIPOS).map(function (t) { return '<option value="' + t + '"' + (t === clase ? ' selected' : '') + '>' + TIPOS[t] + '</option>'; }).join('') + '</select></td>' +
           '<td><input data-k="asientos" type="number" min="1" max="80" step="1" value="' + esc(asientos) + '" style="width:80px"></td>' +
           '<td class="ap-actions"><button data-save class="' + (v ? '' : 'primary') + '">' + (v ? 'Guardar' : 'Agregar') + '</button>' + (v ? '<button class="danger" data-rm>Quitar</button>' : '') + '</td></tr>';
@@ -903,7 +1206,7 @@ geotab.addin.asientosPid = function () {
         var d = S.devices[id] || {};
         return '<option value="' + esc(id) + '"' + (h.dev === id ? ' selected' : '') + '>' + esc((d.licensePlate ? d.licensePlate + ' · ' : '') + nombreDev(id)) + '</option>';
       }).join('') + '</select></label>' +
-      '<label>Evento<select name="evento"><option value="">Subidas y bajadas</option><option value="sube"' + (h.evento === 'sube' ? ' selected' : '') + '>Solo subidas</option><option value="baja"' + (h.evento === 'baja' ? ' selected' : '') + '>Solo bajadas</option></select></label>' +
+      '<label>Evento<select name="evento"><option value="">Subidas y bajadas</option><option value="sube"' + (h.evento === 'sube' ? ' selected' : '') + '>Solo subidas</option><option value="baja"' + (h.evento === 'baja' ? ' selected' : '') + '>Solo bajadas</option><option value="alertas"' + (h.evento === 'alertas' ? ' selected' : '') + '>Solo alertas</option></select></label>' +
       '<label class="grow">Pasajero<input type="search" name="q" placeholder="Nombre, legajo o hex" value="' + esc(h.q) + '"></label>' +
       '<button type="submit" class="primary"' + (h.cargando ? ' disabled' : '') + '>' + (h.cargando ? 'Buscando…' : 'Buscar') + '</button>' +
       '<button type="button" id="ap-csv"' + (h.filas && h.filas.length ? '' : ' disabled') + '>Exportar a Excel</button>' +
@@ -929,6 +1232,7 @@ geotab.addin.asientosPid = function () {
     return (h.filas || []).filter(function (r) {
       if (h.evento === 'sube' && ['sube', 'excedido'].indexOf(r.accion) < 0) return false;
       if (h.evento === 'baja' && ['baja', 'vaciado'].indexOf(r.accion) < 0) return false;
+      if (h.evento === 'alertas' && !r.alerta) return false;
       if (!q) return true;
       var p = persona(r.hex) || {};
       return [r.hex, p.nombre, p.legajo, p.usuario].join(' ').toLowerCase().indexOf(q) >= 0;
@@ -943,7 +1247,7 @@ geotab.addin.asientosPid = function () {
     var filas = filasHistFiltradas();
     var mostrar = filas.slice(0, 500);
     cont.innerHTML = '<div class="ap-muted-line">' + filas.length + ' eventos' + (filas.length > mostrar.length ? ' (se muestran los primeros 500; exportá a Excel para ver todos)' : '') + '</div>' +
-      '<table class="ap-table"><thead><tr><th>Fecha y hora</th><th>Evento</th><th>Pasajero</th><th>Hex tarjeta</th><th>Vehículo</th><th>Asiento</th><th>Ubicación</th></tr></thead><tbody>' +
+      '<table class="ap-table"><thead><tr><th>Fecha y hora</th><th>Evento</th><th>Pasajero</th><th>Hex tarjeta</th><th>Vehículo</th><th>Asiento</th><th>Alerta</th><th>Ubicación</th></tr></thead><tbody>' +
       (mostrar.map(function (r) {
         var p = persona(r.hex);
         var d = S.devices[r.dev] || {};
@@ -956,8 +1260,8 @@ geotab.addin.asientosPid = function () {
           '<td>' + (p ? esc(p.nombre) : '<span class="amber">Sin registrar</span>') + '</td>' +
           '<td class="mono">' + esc(r.hex) + '</td>' +
           '<td>' + esc(d.licensePlate || '') + ' <span class="muted">' + esc(nombreDev(r.dev)) + '</span></td>' +
-          '<td>' + (r.asiento || '—') + '</td><td>' + ubic + '</td></tr>';
-      }).join('') || '<tr><td colspan="7" class="ap-empty">Sin subidas ni bajadas en el período.</td></tr>') +
+          '<td>' + (r.asiento || '—') + '</td><td>' + (r.alerta ? '<span class="red">⚠ ' + esc(r.alerta) + '</span>' : '') + '</td><td>' + ubic + '</td></tr>';
+      }).join('') || '<tr><td colspan="8" class="ap-empty">Sin subidas ni bajadas en el período.</td></tr>') +
       '</tbody></table>';
   }
 
@@ -990,9 +1294,15 @@ geotab.addin.asientosPid = function () {
           (res[ids.length + i] || []).forEach(function (sd) { if (Number(sd.data) === 0) evs.push({ t: new Date(sd.dateTime).getTime(), tipo: 'ign_off' }); });
         }
         var asientos = S.vehiculos[id] ? Number(S.vehiculos[id].d.asientos) || 0 : 99;
-        PidLogic.procesar(evs, S.cfg, asientos).log.forEach(function (l) {
+        PidLogic.procesar(evs, S.cfg, asientos, { ignorar: esIgnorada }).log.forEach(function (l) {
           if (!EVENTOS_HIST[l.accion] || l.t < d0.getTime() || l.t > d1.getTime()) return;
-          filas.push({ t: l.t, accion: l.accion, hex: l.hex, asiento: l.asiento, dev: id });
+          var alerta = '';
+          if (l.accion === 'sube' || l.accion === 'excedido') {
+            var p = persona(l.hex);
+            var mot = motivoNoHabilitado(p, id, l.t);
+            alerta = [l.accion === 'excedido' ? 'Capacidad superada' : '', mot ? 'No habilitado: ' + mot : '', p ? '' : 'Tarjeta sin registrar'].filter(Boolean).join(' · ');
+          }
+          filas.push({ t: l.t, accion: l.accion, hex: l.hex, asiento: l.asiento, dev: id, alerta: alerta });
         });
       });
       filas.sort(function (a, b) { return b.t - a.t; });
@@ -1048,7 +1358,7 @@ geotab.addin.asientosPid = function () {
   function exportarHistorial() {
     var filas = filasHistFiltradas().slice().reverse();
     var cel = function (v) { v = v == null ? '' : String(v); return /[;"\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
-    var lineas = [['Fecha', 'Hora', 'Evento', 'Pasajero', 'Legajo', 'Hex tarjeta', 'Origen', 'Patente', 'Vehículo', 'Asiento', 'Latitud', 'Longitud', 'Ubicación'].join(';')];
+    var lineas = [['Fecha', 'Hora', 'Evento', 'Pasajero', 'Legajo', 'Hex tarjeta', 'Origen', 'Patente', 'Vehículo', 'Asiento', 'Alerta', 'Latitud', 'Longitud', 'Ubicación'].join(';')];
     filas.forEach(function (r) {
       var p = persona(r.hex) || {};
       var d = new Date(r.t), dev = S.devices[r.dev] || {};
@@ -1057,7 +1367,7 @@ geotab.addin.asientosPid = function () {
         d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }),
         EVENTOS_HIST[r.accion] || r.accion, p.nombre || 'Sin registrar', p.legajo || '', r.hex,
         p.origen === 'geotab' ? 'Usuario Geotab' : (p.origen ? 'Padrón' : ''),
-        dev.licensePlate || '', nombreDev(r.dev), r.asiento || '',
+        dev.licensePlate || '', nombreDev(r.dev), r.asiento || '', r.alerta || '',
         r.lat != null ? String(r.lat).replace('.', ',') : '', r.lon != null ? String(r.lon).replace('.', ',') : '', r.direccion || ''
       ].map(cel).join(';'));
     });
@@ -1087,6 +1397,11 @@ geotab.addin.asientosPid = function () {
       '<small>Cuántas horas hacia atrás se reconstruye quién está a bordo.</small></label>' +
       '<label>Refresco (segundos)<input name="refrescoSeg" type="number" min="5" max="300" step="1" value="' + esc(c.refrescoSeg) + '">' +
       '<small>Cada cuánto se consultan las lecturas nuevas. Mínimo 5 s.</small></label>' +
+      '<label class="chk"><input type="checkbox" name="sonidoAlertas"' + (c.sonidoAlertas !== false ? ' checked' : '') + '> Sonido en las alertas</label>' +
+      '<div class="ap-cfg-ign"><b>Tarjetas ignoradas</b><small>No ocupan asiento ni generan alertas (por ejemplo, llaves NFC de conductores sin usuario).</small>' +
+      ((c.ignorados || []).length ? (c.ignorados || []).map(function (h) {
+        return '<div class="ap-row"><span class="mono grow">' + esc(h) + '</span><button type="button" class="ap-link" data-unign="' + esc(h) + '">Dejar de ignorar</button></div>';
+      }).join('') : '<div class="muted sm">Ninguna.</div>') + '</div>' +
       '<div class="ap-err" id="ap-cerr"></div><button type="submit" class="primary">Guardar configuración</button></form>';
     $('#ap-cfg').onsubmit = function (ev) {
       ev.preventDefault();
@@ -1097,17 +1412,30 @@ geotab.addin.asientosPid = function () {
         modo: f.elements.modo.value,
         resetIgnicion: f.elements.resetIgnicion.checked,
         ventanaHoras: Math.min(48, Math.max(1, Math.round(Number(f.elements.ventanaHoras.value) || 12))),
-        refrescoSeg: Math.min(300, Math.max(5, Math.round(Number(f.elements.refrescoSeg.value) || 5)))
+        refrescoSeg: Math.min(300, Math.max(5, Math.round(Number(f.elements.refrescoSeg.value) || 5))),
+        sonidoAlertas: f.elements.sonidoAlertas.checked,
+        ignorados: S.cfg.ignorados || []
       };
-      var cambiaVentana = nv.ventanaHoras !== S.cfg.ventanaHoras;
-      guardarRec(S.cfgRec, { tipo: 'config', valores: nv }).then(function (r) {
-        S.cfgRec = { id: r.id }; S.cfg = nv;
-        if (cambiaVentana) { S.feedVersion = null; S.lecturas = {}; }
-        iniciarTimer();
-        toast('Configuración guardada');
-        return refrescar();
-      }).catch(function (e) { $('#ap-cerr').textContent = errMsg(e); });
+      guardarConfig(nv).then(function () { toast('Configuración guardada'); })
+        .catch(function (e) { $('#ap-cerr').textContent = errMsg(e); });
     };
+    root.querySelectorAll('[data-unign]').forEach(function (b) {
+      b.onclick = function () {
+        var h = b.getAttribute('data-unign');
+        guardarConfig(Object.assign({}, S.cfg, { ignorados: (S.cfg.ignorados || []).filter(function (x) { return x !== h; }) }))
+          .then(function () { toast('La tarjeta ya no se ignora'); renderConfig(); }).catch(function (e) { toast(errMsg(e), 'err'); });
+      };
+    });
+  }
+
+  function guardarConfig(nv) {
+    var cambiaVentana = nv.ventanaHoras !== S.cfg.ventanaHoras;
+    return guardarRec(S.cfgRec, { tipo: 'config', valores: nv }).then(function (r) {
+      S.cfgRec = { id: r.id }; S.cfg = nv;
+      if (cambiaVentana) { S.feedVersion = null; S.lecturas = {}; }
+      iniciarTimer();
+      return refrescar();
+    });
   }
 
   function iniciarTimer() {
@@ -1126,7 +1454,9 @@ geotab.addin.asientosPid = function () {
       root = document.getElementById('asientosPid');
       S.feedVersion = null; S.lecturas = {}; S.error = null;
       render();
+      S.alertasIniciadas = false; S.alertasVistas = {};
       Promise.all([cargarAddInData(), cargarDevices(), cargarUsuariosTarjeta()])
+        .then(function () { return cargarLectores(); })
         .then(function () { render(); return refrescar(); })
         .catch(function (e) { S.error = errMsg(e); render(); })
         .then(iniciarTimer);

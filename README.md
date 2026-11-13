@@ -7,7 +7,9 @@ Add-in para MyGeotab que muestra, en tiempo real, quién va sentado en cada veh�
 - **Detalle**: plano del vehículo visto desde arriba (camioneta, combi o colectivo). Los asientos se llenan del 1 en adelante a medida que suben los pasajeros: verde = pasajero registrado, amarillo = tarjeta sin registrar, violeta = conductor.
 - **Minimapa** (en el detalle): recorrido de las últimas horas, posición actual y un punto por cada subida (verde) y bajada (gris) con popup. Tocar un evento de la lista lo centra en el mapa. Leaflet + OpenStreetMap.
 - **Historial**: subidas y bajadas por rango de fechas (hasta 31 días), vehículo, tipo de evento y pasajero, con fecha, hora, asiento y ubicación (posición GPS interpolada por Geotab en el instante del evento + dirección y zona). Exporta a Excel (CSV).
-- **Pasajeros**: usuarios de Geotab con llave + padrón propio (hex de tarjeta, nombre, legajo/DNI, empresa, turno). Alta, edición, baja, importación desde Excel/CSV y lista de tarjetas leídas sin registrar.
+- **Alertas**: capacidad superada, persona no habilitada (inhabilitada, vencida o no permitida en ese vehículo) y tarjetas sin registrar. Barra en todas las vistas, aviso emergente, sonido y notificación del navegador mientras el add-in está abierto. También quedan en el Historial.
+- **Personas**: todos los usuarios conductores de MyGeotab + padrón propio. Rol (conductor/pasajero; automático según el tipo de llave: personalizada = pasajero, NFC = conductor) y habilitación (estado, motivo, vencimiento, vehículos permitidos). Acciones en lote. Las llaves de conductor leídas por el PID no ocupan asiento.
+- **Pasajeros (padrón)**: usuarios de Geotab con llave + padrón propio (hex de tarjeta, nombre, legajo/DNI, empresa, turno). Alta, edición, baja, importación desde Excel/CSV y lista de tarjetas leídas sin registrar.
 - **Vehículos**: tipo y cantidad de asientos de pasajeros por vehículo.
 - **Configuración**: descenso, desbloqueo, regla de bajada, vaciado por ignición, ventana y refresco.
 
@@ -17,6 +19,8 @@ Add-in para MyGeotab que muestra, en tiempo real, quién va sentado en cada veh�
 | Lecturas de tarjetas | `CustomData` (trama `RUID` + UID). Se lee con `GetFeed`. |
 | Conductor | `DeviceStatusInfo.driver` → `User` |
 | Identidad del pasajero | 1) `User.keys[].serialNumber` de los conductores de Geotab (llave personalizada con el hex), 2) padrón en `AddInData` |
+| Lector conectado a cada vehículo | `IoxAddOn` de tipo 4247 (IOX del PID) en el GO |
+| Rol y habilitación | `AddInData` (`tipo: persona`) por usuario |
 | Ubicación del historial | `LogRecord` con `fromDate = toDate` (interpolado) + `GetAddresses` |
 | Ignición (opcional) | `StatusData` `DiagnosticIgnitionId` |
 | Padrón, vehículos y configuración | `AddInData` con `addInId = ad6jPCvZGTvCRcGDo4yXoiQ` |

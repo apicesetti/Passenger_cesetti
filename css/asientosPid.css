@@ -193,3 +193,35 @@
 .ap-row.clic { cursor: pointer; }
 .ap-row.clic:hover { background: var(--ap-info-bg); }
 #asientosPid .leaflet-container { font-family: inherit; font-size: 0.75rem; }
+
+/* Alertas */
+.ap-alertbar { border-radius: var(--ap-radius); margin-bottom: 1rem; border: 1px solid; }
+.ap-alertbar.alta { background: var(--ap-err-bg); border-color: #f47c7d; color: var(--ap-err-fg); }
+.ap-alertbar.media { background: var(--ap-warn-bg); border-color: var(--ap-warn); color: var(--ap-warn-fg); }
+.ap-alert-head { display: flex; gap: 0.75rem; align-items: center; padding: 0.5rem 0.75rem; }
+.ap-alert-list { background: var(--ap-bg); color: var(--ap-text); border-top: 1px solid inherit; max-height: 16rem; overflow: auto; }
+.ap-alert-list .ap-row { gap: 0.625rem; }
+.ap-notif { margin: -0.5rem 0 0.75rem; font-size: 0.75rem; }
+.ap-pill { display: inline-block; font-size: 0.6875rem; line-height: 1.125rem; border-radius: 0.5rem; padding: 0 0.5rem; white-space: nowrap; }
+.ap-pill.alta { background: var(--ap-err-bg); color: var(--ap-err-fg); border: 1px solid #f47c7d; }
+.ap-pill.media { background: var(--ap-warn-bg); color: var(--ap-warn-fg); border: 1px solid var(--ap-warn); }
+.ap-pill.ok { background: var(--ap-ok-bg); color: var(--ap-ok-fg); border: 1px solid #a3d9b1; }
+#asientosPid .ap-card.alerta { border-color: var(--ap-danger); box-shadow: inset 4px 0 0 var(--ap-danger); }
+.ap-card-alert { color: var(--ap-err-fg); font-weight: 500; margin-top: 0.25rem; }
+.ap-seat.nohab rect { fill: var(--ap-danger); stroke: #a01f0e; }
+.ap-seat.nohab text { fill: #fff; }
+.ap-legend .sw.nohab { background: var(--ap-danger); border-color: #a01f0e; }
+
+/* Personas */
+.sm { font-size: 0.6875rem; line-height: 1rem; }
+.ap-bulk { display: flex; gap: 0.5rem; align-items: center; background: var(--ap-info-bg); border-radius: var(--ap-radius); padding: 0.5rem 0.75rem; margin-bottom: 0.75rem; }
+.ap-table tr.sel td { background: var(--ap-info-bg); }
+.ap-table select { height: 1.75rem; font-size: 0.8125rem; }
+.ap-chipg { display: inline-flex; }
+#asientosPid .ap-chipg .ap-chip { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+#asientosPid .ap-chip-x { height: 1.75rem; border-left: none; border-radius: 0 0.5rem 0.5rem 0; color: var(--ap-text-2); }
+.ap-vehlist { max-height: 12rem; overflow: auto; border: 1px solid var(--ap-border); border-radius: var(--ap-radius); padding: 0.5rem 0.75rem; display: flex; flex-direction: column; gap: 0.375rem; }
+.ap-vehlist[hidden] { display: none; }
+.ap-cfg-ign { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.75rem; }
+.ap-cfg-ign small { color: var(--ap-text-2); }
+.ap-cfg-ign .ap-row { border: 1px solid var(--ap-bg-2); border-radius: var(--ap-radius); }

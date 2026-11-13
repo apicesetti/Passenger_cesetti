@@ -17,7 +17,8 @@ const feed = [
   { id: 'b5', device: { id: 'bBA' }, dateTime: iso(60), data: 'UkVBREVSIENPTk5FQ1RFRA==' },
   { id: 'b6', device: { id: 'bBA' }, dateTime: iso(10), data: 'UlVJRAAAAIyajBM=' },
   { id: 'b7', device: { id: 'bBA' }, dateTime: iso(9.9), data: 'UlVJRAAAADEBLA8=' },
-  { id: 'b8', device: { id: 'bBB' }, dateTime: iso(5), data: 'UlVJRAAAAAECAwQ=' }
+  { id: 'b8', device: { id: 'bBB' }, dateTime: iso(5), data: 'UlVJRAAAAAECAwQ=' },
+  { id: 'b9', device: { id: 'bBA' }, dateTime: iso(4), data: Buffer.from([82, 85, 73, 68, 4, 0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0xF6]).toString('base64') }
 ];
 function handle(method, p) {
   calls.push([method, p.typeName]);
@@ -36,6 +37,7 @@ function handle(method, p) {
   if (method === 'Get' && p.typeName === 'LogRecord') return [{ latitude: -38.9504623, longitude: -68.0575638, dateTime: p.search.fromDate }];
   if (method === 'GetAddresses') return p.coordinates.map(() => ({ formattedAddress: 'Buenos Aires 444, Neuquén', zones: [{ name: 'Base Cesetti' }] }));
   if (method === 'Get' && p.typeName === 'StatusData') return [];
+  if (method === 'Get' && p.typeName === 'IoxAddOn') return [{ channel: 1, type: 4247, device: { id: 'bBA' }, dateTime: '2026-11-12T16:55:40.918Z' }, { channel: 6, type: 4291, device: { id: 'bBB' }, dateTime: '2026-11-12T16:55:37.664Z' }];
   throw new Error('no mock ' + method + ' ' + p.typeName);
 }
 const api = {
@@ -60,7 +62,7 @@ const txt = () => $('#asientosPid').textContent;
   addin.focus(api, {});
   await sleep(150);
   assert(txt().includes('Todavía no hay vehículos configurados'), 'flota vacía');
-  assert(txt().includes('2 vehículo(s) con lecturas'), 'aviso sin configurar');
+  assert(txt().includes('2 vehículo(s) con lector PID o lecturas'), 'aviso sin configurar');
 
   // Configurar vehículo: pestaña Vehículos muestra los que tienen lecturas
   $('[data-tab=vehiculos]').click(); await sleep(20);
@@ -114,8 +116,35 @@ const txt = () => $('#asientosPid').textContent;
   assert($('#ap-merr').textContent.includes('PASAJERO_1'), 'duplicado usuario Geotab');
   $('[data-x]').click();
   assert(txt().includes('01020304'), 'chip sin registrar');
-  assert(txt().includes('3 tarjetas identificadas: 2 por usuarios de Geotab'), txt());
-  assert(txt().includes('Usuario Geotab'));
+  assert(txt().includes('2 usuarios de MyGeotab y 1 en el padrón'), 'conteo personas');
+  const rolP1 = $('select[data-rol="b1C8"]'), rolJP = $('select[data-rol="u1"]');
+  assert.strictEqual(rolP1.value, 'pasajero', 'llave Custom => pasajero');
+  assert.strictEqual(rolJP.value, 'conductor', 'llave NFC => conductor');
+
+  // Inhabilitar a PASAJERO_1 => asiento rojo y alerta
+  $('[data-hab="u:b1C8"]').click(); await sleep(5);
+  const fh = $('.ap-dialog form'); fh.elements.hab.checked = false; fh.elements.motivo.value = 'Inducción vencida';
+  fh.dispatchEvent(new w.Event('submit', { cancelable: true })); await sleep(40);
+  assert(store.some((x) => x.details.tipo === 'persona' && x.details.userId === 'b1C8' && x.details.habilitado === false), 'persona guardada');
+  assert($('#ap-alertas').textContent.includes('no está habilitado'), 'alerta no habilitado');
+  $('[data-tab=flota]').click(); await sleep(10);
+  $('.ap-card[data-dev=bBA]').click(); await sleep(20);
+  assert.strictEqual($$('.ap-seat.nohab').length, 1, 'asiento rojo');
+  assert(txt().includes('Lector PID conectado desde'), 'lector detectado por IoxAddOn');
+  assert(txt().includes('llave de conductor'), 'llave NFC del conductor ignorada');
+  assert.strictEqual(d.querySelectorAll('.ap-seat.occ, .ap-seat.unk, .ap-seat.nohab').length, 2, 'la llave del conductor no ocupa asiento');
+
+  // Capacidad: bBA con 1 asiento => el segundo pasajero queda sin asiento y alerta
+  $('[data-tab=vehiculos]').click(); await sleep(10);
+  { const qv2 = $('#ap-qv'); qv2.value = ''; qv2.dispatchEvent(new w.Event('input')); await sleep(10); }
+  $('tr[data-row=bBA] [data-k=asientos]').value = '1';
+  $('tr[data-row=bBA] [data-save]').click(); await sleep(40);
+  assert($('#ap-alertas').textContent.includes('alerta'), 'barra de alertas');
+  if (!$('#ap-alertas').textContent.includes('Capacidad superada')) { $('#ap-alert-tg').click(); await sleep(5); }
+  assert($('#ap-alertas').textContent.includes('Capacidad superada'), 'alerta capacidad');
+  $('tr[data-row=bBA] [data-k=asientos]').value = '15';
+  $('tr[data-row=bBA] [data-save]').click(); await sleep(40);
+  $('[data-tab=pasajeros]').click(); await sleep(10);
 
   // Historial
   $('[data-tab=historial]').click(); await sleep(10);
@@ -123,6 +152,7 @@ const txt = () => $('#asientosPid').textContent;
   const filasH = $$('#ap-hres tbody tr');
   assert.strictEqual(filasH.length, 3, 'historial: 3 subidas (2 en bBA, 1 en bBB)');
   assert(txt().includes('Base Cesetti · Buenos Aires 444, Neuquén'), 'dirección con zona');
+  assert(txt().includes('No habilitado: Inhabilitado: Inducción vencida'), 'alerta en historial');
   assert(txt().includes('PASAJERO 1') && txt().includes('Ana Gómez'));
   const hq = $('#ap-hf').elements.q; hq.value = 'pasajero'; hq.dispatchEvent(new w.Event('input')); await sleep(5);
   assert.strictEqual($$('#ap-hres tbody tr').length, 1, 'filtro por pasajero');
