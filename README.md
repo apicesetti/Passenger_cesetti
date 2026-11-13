@@ -31,9 +31,14 @@ Iguales al add-in PID:
 2. MyGeotab: *Administración → Sistema → Configuración del sistema → Add-Ins → Nuevo add-in*, pegar `config.json`.
 3. Aparece en el menú **Actividad → Mapa de asientos**.
 
-## Desarrollo
+## Estructura
+- `asientosPid.html`: página del add-in (solo referencia los archivos; MyGeotab descarta los `<style>` en línea).
+- `css/asientosPid.css`: estilos según el sistema de diseño **Zenith** de Geotab (usa sus variables, con respaldo del tema claro).
+- `js/logic.js`: reglas de ascenso y descenso y planos de asientos (sin DOM).
+- `js/app.js`: vistas, API de MyGeotab y AddInData.
+
+## Pruebas
 ```
-python build.py            # arma asientosPid.html desde src/
-node test/logic.test.js    # pruebas de la lógica con las tramas reales de CESETTI_TEST
+npm install
+npm test     # lógica con las tramas reales de CESETTI_TEST + interfaz con API simulada
 ```
-Editar siempre en `src/` y volver a correr `build.py`.

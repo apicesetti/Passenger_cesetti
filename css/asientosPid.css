@@ -1,0 +1,175 @@
+/* Mapa de asientos PID — estilos según el sistema de diseño Zenith de Geotab.
+   Usa las variables de Zenith que ya define MyGeotab, con los valores del tema claro como respaldo. */
+#asientosPid {
+  --ap-text: var(--text-primary, #1f2833);
+  --ap-text-2: var(--text-secondary, #4e677e);
+  --ap-placeholder: var(--text-placeholder, #8da4b9);
+  --ap-link: var(--text-hyperlink, #005aa8);
+  --ap-bg: var(--backgrounds-main, #ffffff);
+  --ap-bg-0: var(--backgrounds-content-0, #f9fafb);
+  --ap-bg-1: var(--backgrounds-content-1, #f2f5f7);
+  --ap-bg-2: var(--backgrounds-content-2, #d9e1e8);
+  --ap-hover: var(--backgrounds-hover, #e6ebef);
+  --ap-brand: var(--backgrounds-primary-brand, #25477b);
+  --ap-border: var(--borders-general, #c0ccd8);
+  --ap-border-2: var(--borders-secondary, #748faa);
+  --ap-primary: var(--action-primary--default, #0078d3);
+  --ap-primary-hover: var(--action-primary--hover, #005aa8);
+  --ap-primary-active: var(--action-primary--active, #004080);
+  --ap-danger: var(--action-destructive--default, #c51a11);
+  --ap-ok: #4aa75e;
+  --ap-ok-bg: #edfef2;
+  --ap-ok-fg: #2b6436;
+  --ap-warn: #faad41;
+  --ap-warn-bg: #fef7ed;
+  --ap-warn-fg: #59480d;
+  --ap-err-bg: #ffeceb;
+  --ap-err-fg: #c51a11;
+  --ap-info-bg: #ebf6ff;
+  --ap-radius: var(--border-radius-default, 4px);
+  font-family: var(--main-font, Roboto, "Segoe UI", Segoe, "Helvetica Neue", Helvetica, sans-serif);
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  letter-spacing: 0.01rem;
+  color: var(--ap-text);
+  background: var(--ap-bg);
+  padding: 1.5rem 2rem 3rem;
+  box-sizing: border-box;
+  min-height: 100%;
+}
+#asientosPid *, #asientosPid *::before, #asientosPid *::after { box-sizing: border-box; }
+
+/* Botones (zen-button) */
+#asientosPid button {
+  font-family: inherit; font-size: 0.75rem; line-height: 1rem; letter-spacing: 0.02rem; font-weight: 400;
+  height: 2rem; padding: 0 0.75rem; border: 1px solid var(--ap-border); border-radius: var(--ap-radius);
+  background: var(--ap-bg); color: var(--ap-text); cursor: pointer; display: inline-flex; align-items: center; gap: 0.375rem;
+  transition: background-color .15s, border-color .15s;
+}
+#asientosPid button:hover { background: var(--ap-hover); border-color: var(--ap-border-2); }
+#asientosPid button:focus-visible { outline: 2px solid var(--ap-primary); outline-offset: 1px; }
+#asientosPid button.primary { background: var(--ap-primary); border-color: var(--ap-primary); color: #fff; font-weight: 500; }
+#asientosPid button.primary:hover { background: var(--ap-primary-hover); border-color: var(--ap-primary-hover); }
+#asientosPid button.primary:active { background: var(--ap-primary-active); }
+#asientosPid button.danger { color: var(--ap-danger); }
+#asientosPid button.danger:hover { background: var(--ap-err-bg); border-color: var(--ap-danger); }
+#asientosPid button:disabled { opacity: .55; cursor: default; }
+#asientosPid .ap-link { border: none; background: none; color: var(--ap-link); height: auto; padding: 0 0.25rem; }
+#asientosPid .ap-link:hover { background: none; text-decoration: underline; }
+#asientosPid a { color: var(--ap-link); }
+
+/* Campos (zen-text-input) */
+#asientosPid input:not([type=checkbox]), #asientosPid select {
+  font-family: inherit; font-size: 0.875rem; color: var(--ap-text); background: var(--ap-bg);
+  height: 2rem; padding: 0 0.625rem; border: 1px solid var(--ap-border); border-radius: var(--ap-radius); outline: none;
+}
+#asientosPid input::placeholder { color: var(--ap-placeholder); }
+#asientosPid input:hover, #asientosPid select:hover { border-color: var(--ap-border-2); }
+#asientosPid input:focus, #asientosPid select:focus { border-color: var(--ap-primary); box-shadow: 0 0 0 1px var(--ap-primary); }
+#asientosPid input[type=checkbox] { width: 1rem; height: 1rem; accent-color: var(--ap-primary); margin: 0; }
+#asientosPid input[type=search] { padding-left: 2rem; background: var(--ap-bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%234e677e' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E") no-repeat 0.6rem center; }
+
+/* Encabezado y pestañas (zen-tabs) */
+.ap-head { display: flex; align-items: flex-end; gap: 2rem; flex-wrap: wrap; border-bottom: 1px solid var(--ap-border); margin-bottom: 1.25rem; }
+.ap-title { font-size: 1.5rem; line-height: 2rem; font-weight: 500; padding-bottom: 0.625rem; color: var(--ap-text); }
+.ap-tabs { display: flex; gap: 0.25rem; }
+#asientosPid .ap-tabs button { height: 2.25rem; border: none; border-radius: 0; background: none; padding: 0 0.875rem; font-size: 0.875rem; color: var(--ap-text-2); border-bottom: 2px solid transparent; margin-bottom: -1px; }
+#asientosPid .ap-tabs button:hover { color: var(--ap-text); background: none; }
+#asientosPid .ap-tabs button.on { color: var(--ap-primary); border-bottom-color: var(--ap-primary); font-weight: 500; }
+.ap-status { margin-left: auto; font-size: 0.75rem; color: var(--ap-text-2); padding-bottom: 0.75rem; }
+.ap-status .err, .ap-err { color: var(--ap-err-fg); }
+.ap-err { font-size: 0.75rem; min-height: 0.25rem; }
+
+/* Utilidades */
+.ap-bar { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; }
+.ap-bar input[type=search] { min-width: 18rem; }
+.grow { flex: 1; }
+.muted { color: var(--ap-text-2); }
+.mono { font-family: var(--main-font-data, "Roboto Mono", Consolas, monospace); font-size: 0.75rem; }
+.green { color: var(--ap-ok-fg); } .amber { color: var(--ap-warn-fg); } .red { color: var(--ap-err-fg); }
+.ap-muted-line { font-size: 0.75rem; color: var(--ap-text-2); margin: -0.25rem 0 0.5rem; }
+.ap-empty { color: var(--ap-text-2); padding: 1rem 0.25rem; }
+.ap-warn { background: var(--ap-warn-bg); color: var(--ap-warn-fg); border-left: 4px solid var(--ap-warn); border-radius: 0; padding: 0.625rem 0.875rem; margin-bottom: 1rem; font-size: 0.8125rem; }
+.ap-warn.red { background: var(--ap-err-bg); color: var(--ap-err-fg); border-left-color: var(--ap-danger); margin-top: 0.75rem; }
+.ap-warn a { color: inherit; font-weight: 500; }
+.ap-tag { display: inline-block; font-size: 0.6875rem; line-height: 1rem; background: var(--ap-bg-1); color: var(--ap-text-2); border: 1px solid var(--ap-border); border-radius: 0.5rem; padding: 0 0.5rem; font-weight: 400; vertical-align: middle; }
+
+/* Flota (zen-card) */
+.ap-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 1rem; }
+#asientosPid .ap-card { height: auto; text-align: left; padding: 1rem; border-radius: 0.5rem; border: 1px solid var(--ap-border); background: var(--ap-bg); display: flex; flex-direction: column; align-items: stretch; gap: 0.25rem; font-size: 0.875rem; }
+#asientosPid .ap-card:hover { border-color: var(--ap-primary); background: var(--ap-bg); box-shadow: 0 2px 8px rgba(31, 40, 51, .12); }
+.ap-card-top { display: flex; justify-content: space-between; align-items: center; }
+.ap-plate { font-weight: 500; font-size: 1rem; letter-spacing: 0.04rem; }
+.ap-card-name { color: var(--ap-text-2); font-size: 0.75rem; }
+.ap-occ { font-size: 0.875rem; color: var(--ap-text-2); margin-top: 0.5rem; }
+.ap-occ b { font-size: 1.5rem; line-height: 2rem; font-weight: 500; color: var(--ap-text); }
+.ap-bar-bg { height: 0.375rem; background: var(--ap-bg-2); border-radius: 0.25rem; overflow: hidden; }
+.ap-bar-fg { height: 100%; background: var(--ap-border-2); border-radius: 0.25rem; }
+.ap-bar-fg.green { background: var(--ap-ok); } .ap-bar-fg.red { background: var(--ap-danger); }
+.ap-card-foot { font-size: 0.75rem; color: var(--ap-text-2); margin-top: 0.375rem; }
+
+/* Detalle */
+.ap-detail { display: grid; grid-template-columns: minmax(18rem, 28rem) minmax(0, 1fr); gap: 2rem; align-items: start; }
+@media (max-width: 860px) { .ap-detail { grid-template-columns: minmax(0, 1fr); } }
+.ap-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-bottom: 0.75rem; }
+.ap-metric { background: var(--ap-bg-1); border-radius: 0.5rem; padding: 0.75rem 1rem; }
+.ap-metric .lbl { font-size: 0.75rem; color: var(--ap-text-2); }
+.ap-metric .val { font-size: 1.5rem; line-height: 2rem; font-weight: 500; margin: 0.125rem 0 0.375rem; }
+.ap-metric .val.sm { font-size: 1rem; line-height: 1.5rem; }
+.ap-plano { background: var(--ap-bg-1); border-radius: 0.5rem; padding: 1rem; display: flex; justify-content: center; }
+.ap-svg { max-width: 100%; height: auto; }
+.ap-svg .ap-body { fill: var(--ap-bg); stroke: var(--ap-border-2); stroke-width: 1.5; }
+.ap-svg .ap-glass { fill: none; stroke: var(--ap-border-2); stroke-width: 1.5; }
+.ap-seat rect { stroke-width: 1.2; }
+.ap-seat text { font-size: 12px; font-weight: 500; font-family: var(--main-font, Roboto, sans-serif); }
+.ap-seat.free rect { fill: var(--ap-bg); stroke: var(--ap-border); }
+.ap-seat.free text { fill: var(--ap-placeholder); font-weight: 400; }
+.ap-seat.occ rect { fill: var(--ap-ok); stroke: var(--ap-ok-fg); }
+.ap-seat.occ text { fill: #fff; }
+.ap-seat.unk rect { fill: var(--ap-warn); stroke: #c98a2e; }
+.ap-seat.unk text { fill: var(--ap-warn-fg); }
+.ap-seat.drv rect { fill: var(--ap-brand); stroke: var(--ap-brand); }
+.ap-seat.drv text { fill: #fff; }
+.ap-legend { display: flex; gap: 1rem; flex-wrap: wrap; font-size: 0.75rem; color: var(--ap-text-2); margin-top: 0.625rem; }
+.ap-legend .sw { display: inline-block; width: 0.75rem; height: 0.75rem; border-radius: 3px; margin-right: 0.375rem; vertical-align: -1px; border: 1px solid var(--ap-border); }
+.ap-legend .sw.occ { background: var(--ap-ok); border-color: var(--ap-ok-fg); }
+.ap-legend .sw.unk { background: var(--ap-warn); border-color: #c98a2e; }
+.ap-legend .sw.drv { background: var(--ap-brand); border-color: var(--ap-brand); }
+#asientosPid h4 { margin: 1.25rem 0 0.5rem; font-size: 1rem; line-height: 1.5rem; font-weight: 500; }
+#asientosPid .ap-col > h4:first-child { margin-top: 0; }
+.ap-list { border: 1px solid var(--ap-border); border-radius: var(--ap-radius); max-height: 22rem; overflow: auto; }
+.ap-row { display: flex; gap: 0.75rem; align-items: center; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--ap-bg-2); font-size: 0.8125rem; }
+.ap-row:last-child { border-bottom: none; }
+.ap-row:hover { background: var(--ap-bg-0); }
+.ap-num { min-width: 1.75rem; text-align: center; font-weight: 500; font-size: 0.75rem; border-radius: var(--ap-radius); padding: 0.125rem 0.25rem; background: var(--ap-bg-1); }
+.ap-num.green { background: var(--ap-ok); color: #fff; }
+.ap-num.amber { background: var(--ap-warn); color: var(--ap-warn-fg); }
+.ap-num.red { background: var(--ap-err-bg); color: var(--ap-err-fg); }
+.ap-ico { width: 1rem; text-align: center; font-weight: 500; }
+
+/* Tablas (zen-data-grid) */
+.ap-table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
+.ap-table th { text-align: left; font-weight: 500; font-size: 0.75rem; color: var(--ap-text-2); background: var(--ap-bg-1); border-bottom: 1px solid var(--ap-border); padding: 0.5rem 0.75rem; }
+.ap-table td { border-bottom: 1px solid var(--ap-bg-2); padding: 0.375rem 0.75rem; vertical-align: middle; height: 2.75rem; }
+.ap-table tbody tr:hover { background: var(--ap-bg-0); }
+.ap-actions { white-space: nowrap; text-align: right; }
+#asientosPid .ap-actions button { margin-left: 0.25rem; }
+.ap-chips { display: flex; flex-wrap: wrap; gap: 0.375rem; margin-top: 0.5rem; }
+#asientosPid .ap-chip { font-family: var(--main-font-data, "Roboto Mono", monospace); height: 1.75rem; border-radius: 0.5rem; background: var(--ap-bg); }
+
+/* Formularios */
+.ap-form { display: flex; flex-direction: column; gap: 1.125rem; max-width: 36rem; }
+.ap-form label, .ap-dialog label { display: flex; flex-direction: column; gap: 0.25rem; font-weight: 500; font-size: 0.75rem; color: var(--ap-text); }
+.ap-form small { font-weight: 400; color: var(--ap-text-2); font-size: 0.75rem; }
+.ap-form label.chk, .ap-dialog label.chk { flex-direction: row; align-items: center; gap: 0.5rem; font-size: 0.875rem; font-weight: 400; }
+#asientosPid .ap-form button { align-self: flex-start; }
+
+/* Diálogos (zen-modal) y avisos (zen-toast) */
+.ap-modal { position: fixed; inset: 0; background: var(--backgrounds-overlay, rgba(31, 40, 51, .4)); display: flex; align-items: center; justify-content: center; z-index: 10000; }
+.ap-dialog { background: var(--ap-bg); border-radius: 0.5rem; padding: 1.5rem; width: min(28rem, 92vw); display: flex; flex-direction: column; gap: 0.75rem; box-shadow: 0 8px 24px rgba(31, 40, 51, .24); }
+.ap-dialog h3 { margin: 0 0 0.25rem; font-size: 1.25rem; line-height: 1.75rem; font-weight: 500; }
+.ap-dialog p { margin: 0; }
+.ap-dialog form { display: flex; flex-direction: column; gap: 0.75rem; }
+.ap-dlg-btns { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.5rem; }
+.ap-toast { position: fixed; right: 1.5rem; bottom: 1.5rem; background: var(--backgrounds-reverse-1, #1f2833); color: #fff; padding: 0.75rem 1rem; border-radius: var(--ap-radius); font-size: 0.875rem; z-index: 10001; box-shadow: 0 4px 12px rgba(31, 40, 51, .24); }
+.ap-toast.err { background: var(--ap-danger); }

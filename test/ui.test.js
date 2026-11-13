@@ -1,7 +1,12 @@
 const { JSDOM } = require('jsdom');
 const fs = require('fs');
 const assert = require('assert');
-const html = fs.readFileSync(process.argv[2], 'utf8');
+const path = require('path');
+const base = path.dirname(path.resolve(process.argv[2]));
+// Arma el HTML con los archivos referenciados en línea (igual que los carga MyGeotab)
+const html = fs.readFileSync(process.argv[2], 'utf8')
+  .replace(/<link rel="stylesheet" href="([^"]+)">/g, (m, f) => '<style>' + fs.readFileSync(path.join(base, f), 'utf8') + '</style>')
+  .replace(/<script src="([^"]+)"><\/script>/g, (m, f) => '<script>' + fs.readFileSync(path.join(base, f), 'utf8') + '</script>');
 
 const now = Date.now();
 const iso = (minAgo) => new Date(now - minAgo * 60000).toISOString();

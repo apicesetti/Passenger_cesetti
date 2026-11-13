@@ -1,6 +1,6 @@
 /* node test/logic.test.js */
 const assert = require('assert');
-const L = require('../src/logic.js');
+const L = require('../js/logic.js');
 
 const T = (s) => new Date('2026-11-12T' + s + 'Z').getTime();
 const cfg = { descensoMin: 30, desbloqueoSeg: 60, modo: 'pid', resetIgnicion: false };

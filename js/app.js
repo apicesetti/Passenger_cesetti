@@ -58,7 +58,7 @@ geotab.addin.asientosPid = function () {
     if (!t) return '';
     var d = new Date(t);
     var hoy = new Date();
-    var hh = d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+    var hh = d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
     return d.toDateString() === hoy.toDateString() ? hh : d.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' }) + ' ' + hh;
   }
   function iniciales(nombre) {
@@ -248,7 +248,7 @@ geotab.addin.asientosPid = function () {
     var el = $('#ap-status');
     if (!el) return;
     if (S.error) el.innerHTML = '<span class="err">Error: ' + esc(S.error) + '</span>';
-    else el.textContent = S.actualizado ? 'Actualizado ' + new Date(S.actualizado).toLocaleTimeString('es-AR') : 'Cargando…';
+    else el.textContent = S.actualizado ? 'Actualizado ' + new Date(S.actualizado).toLocaleTimeString('es-AR', { hourCycle: 'h23' }) : 'Cargando…';
   }
 
   /* Re-render liviano tras cada refresco: solo las vistas en vivo y sin pisar inputs con foco. */
@@ -443,7 +443,7 @@ geotab.addin.asientosPid = function () {
       (lista.map(function (p) {
         var d = p.d;
         return '<tr><td class="mono">' + esc(d.hex) + '</td><td>' + esc(d.nombre) + '</td><td>' + esc(d.legajo) + '</td><td>' + esc(d.empresa) + '</td><td>' + esc(d.turno) + '</td>' +
-          '<td>' + (d.activo === false ? 'No' : 'Sí') + '</td><td class="ap-actions"><button data-edit="' + esc(d.hex) + '">Editar</button><button data-del="' + esc(d.hex) + '">Borrar</button></td></tr>';
+          '<td>' + (d.activo === false ? 'No' : 'Sí') + '</td><td class="ap-actions"><button data-edit="' + esc(d.hex) + '">Editar</button><button class="danger" data-del="' + esc(d.hex) + '">Borrar</button></td></tr>';
       }).join('') || '<tr><td colspan="7" class="ap-empty">Sin pasajeros.</td></tr>') +
       '</tbody></table>';
 
@@ -624,7 +624,7 @@ geotab.addin.asientosPid = function () {
         return '<tr data-row="' + esc(id) + '"><td>' + esc(d.name) + (conLect[id] ? ' <span class="ap-tag">PID</span>' : '') + '</td><td>' + esc(d.licensePlate || '') + '</td>' +
           '<td><select data-k="clase">' + Object.keys(TIPOS).map(function (t) { return '<option value="' + t + '"' + (t === clase ? ' selected' : '') + '>' + TIPOS[t] + '</option>'; }).join('') + '</select></td>' +
           '<td><input data-k="asientos" type="number" min="1" max="80" step="1" value="' + esc(asientos) + '" style="width:80px"></td>' +
-          '<td class="ap-actions"><button data-save class="' + (v ? '' : 'primary') + '">' + (v ? 'Guardar' : 'Agregar') + '</button>' + (v ? '<button data-rm>Quitar</button>' : '') + '</td></tr>';
+          '<td class="ap-actions"><button data-save class="' + (v ? '' : 'primary') + '">' + (v ? 'Guardar' : 'Agregar') + '</button>' + (v ? '<button class="danger" data-rm>Quitar</button>' : '') + '</td></tr>';
       }).join('') || '<tr><td colspan="5" class="ap-empty">' + (q ? 'Sin resultados.' : 'Buscá un vehículo por patente o nombre para configurarlo.') + '</td></tr>') +
       '</tbody></table>';
 
@@ -665,8 +665,9 @@ geotab.addin.asientosPid = function () {
       '<label>Desbloqueo (segundos)<input name="desbloqueoSeg" type="number" min="0" step="1" value="' + esc(c.desbloqueoSeg) + '">' +
       '<small>Las relecturas de la misma tarjeta dentro de este lapso se ignoran.</small></label>' +
       '<label>Regla de bajada<select name="modo">' +
-      '<option value="pid"' + (c.modo === 'pid' ? ' selected' : '') + '>Igual al PID: después del tiempo de descenso, una relectura es un nuevo ascenso</option>' +
-      '<option value="alternar"' + (c.modo === 'alternar' ? ' selected' : '') + '>Alternar: toda relectura de una tarjeta a bordo es bajada</option></select></label>' +
+      '<option value="pid"' + (c.modo === 'pid' ? ' selected' : '') + '>Igual al PID</option>' +
+      '<option value="alternar"' + (c.modo === 'alternar' ? ' selected' : '') + '>Alternar</option></select>' +
+      '<small>Igual al PID: pasado el tiempo de descenso, una relectura cuenta como nuevo ascenso. Alternar: toda relectura de una tarjeta a bordo es bajada.</small></label>' +
       '<label class="chk"><input type="checkbox" name="resetIgnicion"' + (c.resetIgnicion ? ' checked' : '') + '> Vaciar el vehículo al apagar el motor</label>' +
       '<label>Ventana de lecturas (horas)<input name="ventanaHoras" type="number" min="1" max="48" step="1" value="' + esc(c.ventanaHoras) + '">' +
       '<small>Cuántas horas hacia atrás se reconstruye quién está a bordo.</small></label>' +
