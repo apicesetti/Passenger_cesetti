@@ -5,6 +5,7 @@ Add-in para MyGeotab que muestra, en tiempo real, quién va sentado en cada veh�
 ## Vistas
 - **Flota**: tarjetas por vehículo con ocupación, conductor y alertas. Buscador por patente o nombre.
 - **Detalle**: plano del vehículo visto desde arriba (camioneta, combi o colectivo). Los asientos se llenan del 1 en adelante a medida que suben los pasajeros: verde = pasajero registrado, amarillo = tarjeta sin registrar, violeta = conductor.
+- **Minimapa** (en el detalle): recorrido de las últimas horas, posición actual y un punto por cada subida (verde) y bajada (gris) con popup. Tocar un evento de la lista lo centra en el mapa. Leaflet + OpenStreetMap.
 - **Historial**: subidas y bajadas por rango de fechas (hasta 31 días), vehículo, tipo de evento y pasajero, con fecha, hora, asiento y ubicación (posición GPS interpolada por Geotab en el instante del evento + dirección y zona). Exporta a Excel (CSV).
 - **Pasajeros**: usuarios de Geotab con llave + padrón propio (hex de tarjeta, nombre, legajo/DNI, empresa, turno). Alta, edición, baja, importación desde Excel/CSV y lista de tarjetas leídas sin registrar.
 - **Vehículos**: tipo y cantidad de asientos de pasajeros por vehículo.
@@ -28,6 +29,9 @@ Iguales al add-in PID:
 - Tarjeta a bordo releída antes del **descenso** (30 min) desde que subió → bajada.
 - Modo *PID*: una relectura después del tiempo de descenso cuenta como nuevo ascenso (el pasajero sigue a bordo). Modo *alternar*: toda relectura es bajada.
 - Al subir toma el primer asiento libre desde el 1. Si no hay lugar queda “sin asiento” y toma el primero que se libere.
+
+## Tiempo real
+El add-in consulta cada 5 s (configurable) con `GetFeed` de `CustomData`, que solo trae lo nuevo. Conductores e ignición se leen cada 30 s y los usuarios con llave cada 5 min. Con la pestaña del navegador oculta se pausa. La demora real la pone el GO al subir los datos del IOX.
 
 ## Instalación
 1. GitHub Pages: *Settings → Pages → Deploy from branch → main / (root)*.

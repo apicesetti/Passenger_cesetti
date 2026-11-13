@@ -18,7 +18,11 @@ window.geotab = { addin: {} };
     if(m==='Get'&&p.typeName==='DeviceStatusInfo')return[{device:{id:'bBA'},driver:{id:'u1'}},{device:{id:'bBB'},driver:{id:'u2'}}];
     if(m==='Get'&&p.typeName==='User'&&p.search.isDriver)return[{id:'b1C8',name:'PASAJERO_1',firstName:'PASAJERO',lastName:'1',keys:[{driverKeyType:'Custom',serialNumber:'0BADCAFE'}]}];
     if(m==='Get'&&p.typeName==='CustomData')return feed.filter(f=>f.device.id===p.search.deviceSearch.id);
-    if(m==='Get'&&p.typeName==='LogRecord')return[{latitude:-38.95046+Math.random()/500,longitude:-68.05756,dateTime:p.search.fromDate}];
+    if(m==='Get'&&p.typeName==='LogRecord'){
+      const f=Date.parse(p.search.fromDate),tt=Date.parse(p.search.toDate);
+      const pt=t=>{const k=Math.max(0,Math.min(1,(t-(now-90*60000))/(90*60000)));return{latitude:-38.9504-0.25*k+0.03*Math.sin(k*9),longitude:-68.0576+0.35*k,dateTime:new Date(t).toISOString()}};
+      if(f===tt)return[pt(f)];
+      const out=[];for(let t=Math.max(f,now-90*60000);t<=tt;t+=30000)out.push(pt(t));return out;}
     if(m==='GetAddresses')return p.coordinates.map((c,i)=>({formattedAddress:'Ruta Provincial 7 km '+(10+i)+', Añelo, Neuquén',zones:i%3?[]:[{name:'Base Fortín de Piedra'}]}));
     if(m==='Get'&&p.typeName==='User')return[{u1:{firstName:'Juan',lastName:'Pérez'},u2:{firstName:'Marta',lastName:'Ríos'}}[p.search.id]];
     return [];

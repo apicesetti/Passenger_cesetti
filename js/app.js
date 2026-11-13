@@ -6,7 +6,7 @@ geotab.addin.asientosPid = function () {
   var XLSX_URL = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
   var TIPOS = { camioneta: 'Camioneta', combi: 'Combi', colectivo: 'Colectivo' };
   var ASIENTOS_DEF = { camioneta: 4, combi: 15, colectivo: 45 };
-  var CFG_DEF = { descensoMin: 30, desbloqueoSeg: 60, modo: 'pid', resetIgnicion: false, ventanaHoras: 12, refrescoSeg: 20 };
+  var CFG_DEF = { descensoMin: 30, desbloqueoSeg: 60, modo: 'pid', resetIgnicion: false, ventanaHoras: 12, refrescoSeg: 5 };
 
   var api = null;
   var root = null;
@@ -25,6 +25,8 @@ geotab.addin.asientosPid = function () {
     usuarios: {},              // userId -> nombre
     usuariosTarjeta: {},       // hex -> {userId, nombre, legajo} (usuarios de Geotab con llave)
     usuariosLeidos: 0,         // timestamp de la última lectura de usuarios
+    condLeidos: 0,
+    ignLeida: 0,
     feedVersion: null,
     vista: 'flota',
     sel: null,
@@ -226,12 +228,14 @@ geotab.addin.asientosPid = function () {
   }
 
   function refrescar() {
-    if (cargando || !api) return Promise.resolve();
+    if (cargando || !api || (document.hidden && S.actualizado)) return Promise.resolve();
     cargando = true;
     return leerFeed()
       .then(function () {
         podarVentana();
-        var tareas = [leerConductores(), leerIgnicion()];
+        var tareas = [];
+        if (Date.now() - S.condLeidos > 30000) tareas.push(leerConductores().then(function () { S.condLeidos = Date.now(); }));
+        if (Date.now() - S.ignLeida > 30000) tareas.push(leerIgnicion().then(function () { S.ignLeida = Date.now(); }));
         if (Date.now() - S.usuariosLeidos > 300000) tareas.push(cargarUsuariosTarjeta());
         return Promise.all(tareas);
       })
@@ -276,6 +280,7 @@ geotab.addin.asientosPid = function () {
       }).join('') + '</nav>' +
       '<div class="ap-status" id="ap-status"></div></div>' +
       '<div id="ap-body"></div>';
+    if (S.vista !== 'detalle') Mapa.cerrar();
     root.querySelectorAll('[data-tab]').forEach(function (b) {
       b.onclick = function () { S.vista = b.getAttribute('data-tab'); render(); };
     });
@@ -416,7 +421,41 @@ geotab.addin.asientosPid = function () {
     var cond = nombreConductor(id);
     var pct = e.asientos ? Math.min(100, Math.round(n / e.asientos * 100)) : 0;
 
-    var abordo = e.abordo.map(function (a) {
+    // El esqueleto se arma una sola vez por vehículo para no destruir el mapa en cada refresco.
+    if (body.getAttribute('data-detalle') !== id || !$('#ap-map')) {
+      body.setAttribute('data-detalle', id);
+      body.innerHTML =
+        '<div class="ap-bar"><button id="ap-back">← Flota</button><div class="grow"><b>' + esc(d.licensePlate || '') + '</b> ' + esc(d.name) +
+        ' <span class="ap-tag">' + esc(TIPOS[v.d.clase] || v.d.clase) + '</span></div></div>' +
+        '<div class="ap-detail"><div class="ap-col">' +
+        '<div class="ap-metrics" id="ap-d-metrics"></div>' +
+        '<div class="ap-plano" id="ap-d-plano"></div>' +
+        '<div class="ap-legend"><span><i class="sw occ"></i>Pasajero</span><span><i class="sw unk"></i>Sin registrar</span><span><i class="sw drv"></i>Conductor</span><span><i class="sw free"></i>Libre</span></div>' +
+        '<div id="ap-d-warn"></div>' +
+        '<h4>Recorrido</h4><div class="ap-map-wrap"><div id="ap-map"></div><div class="ap-map-msg" id="ap-map-msg">Cargando mapa…</div></div>' +
+        '<div class="ap-legend"><span><i class="sw ruta"></i>Últimas ' + esc(S.cfg.ventanaHoras) + ' h</span><span><i class="dot up"></i>Subida</span><span><i class="dot down"></i>Bajada</span><span><i class="dot veh"></i>Posición actual</span></div>' +
+        '</div><div class="ap-col">' +
+        '<h4>A bordo</h4><div class="ap-list" id="ap-d-abordo"></div>' +
+        '<h4>Últimos eventos</h4><div class="ap-list" id="ap-d-log"></div>' +
+        '</div></div>';
+      $('#ap-back').onclick = function () { S.vista = 'flota'; render(); };
+      if (!body.getAttribute('data-lst')) body.setAttribute('data-lst', '1'), body.addEventListener('click', function (ev) {
+        var b = ev.target.closest && ev.target.closest('[data-reg]');
+        if (b && body.contains(b)) abrirFormPasajero(null, b.getAttribute('data-reg'));
+        var f = ev.target.closest && ev.target.closest('[data-foco]');
+        if (f && body.contains(f)) Mapa.enfocar(f.getAttribute('data-foco'));
+      });
+      Mapa.iniciar(id);
+    }
+
+    $('#ap-d-metrics').innerHTML =
+      '<div class="ap-metric"><div class="lbl">A bordo</div><div class="val">' + n + ' / ' + e.asientos + '</div>' +
+      '<div class="ap-bar-bg"><div class="ap-bar-fg ' + (e.excedidos.length ? 'red' : 'green') + '" style="width:' + pct + '%"></div></div></div>' +
+      '<div class="ap-metric"><div class="lbl">Conductor (NFC)</div><div class="val sm">' + esc(cond || 'Sin identificar') + '</div></div>';
+    $('#ap-d-plano').innerHTML = svgPlano(v.d, e);
+    $('#ap-d-warn').innerHTML = e.excedidos.length ? '<div class="ap-warn red">' + e.excedidos.length + ' pasajero(s) a bordo sin asiento: se superó la capacidad.</div>' : '';
+
+    $('#ap-d-abordo').innerHTML = e.abordo.map(function (a) {
       var nom = nombrePas(a.hex);
       return '<div class="ap-row"><span class="ap-num ' + (a.asiento ? (nom ? 'green' : 'amber') : 'red') + '">' + (a.asiento || '—') + '</span>' +
         '<span class="grow">' + (nom ? esc(nom) : '<span class="amber">Tarjeta sin registrar</span>') + ' <span class="muted mono">' + esc(a.hex) + '</span></span>' +
@@ -424,35 +463,161 @@ geotab.addin.asientosPid = function () {
         (nom ? '' : '<button class="ap-link" data-reg="' + esc(a.hex) + '">Registrar</button>') + '</div>';
     }).join('') || '<div class="ap-empty">Nadie a bordo.</div>';
 
-    var log = e.log.slice().reverse().filter(function (l) { return l.accion !== 'bloqueada'; }).slice(0, 40).map(function (l) {
+    $('#ap-d-log').innerHTML = e.log.slice().reverse().filter(function (l) { return l.accion !== 'bloqueada'; }).slice(0, 40).map(function (l) {
       if (l.accion === 'texto' || l.accion === 'ignicion') {
         return '<div class="ap-row"><span class="ap-ico muted">i</span><span class="grow muted">' + esc(l.texto === 'READER CONNECTED' ? 'Lector conectado' : l.texto) + '</span><span class="muted">' + hora(l.t) + '</span></div>';
       }
       var a = ACCIONES[l.accion] || ['·', l.accion, ''];
       var nom = nombrePas(l.hex) || l.hex;
-      return '<div class="ap-row"><span class="ap-ico ' + a[2] + '">' + a[0] + '</span><span class="grow">' + esc(nom) + ' ' + a[1] +
+      var k = Mapa.clave(l);
+      return '<div class="ap-row' + (Mapa.EV[l.accion] ? ' clic" data-foco="' + esc(k) + '" title="Ver en el mapa' : '') + '"><span class="ap-ico ' + a[2] + '">' + a[0] + '</span><span class="grow">' + esc(nom) + ' ' + a[1] +
         (l.asiento ? ' · asiento ' + l.asiento : '') + '</span><span class="muted">' + hora(l.t) + '</span></div>';
     }).join('') || '<div class="ap-empty">Sin lecturas en las últimas ' + esc(S.cfg.ventanaHoras) + ' h.</div>';
 
-    body.innerHTML =
-      '<div class="ap-bar"><button id="ap-back">← Flota</button><div class="grow"><b>' + esc(d.licensePlate || '') + '</b> ' + esc(d.name) +
-      ' <span class="ap-tag">' + esc(TIPOS[v.d.clase] || v.d.clase) + '</span></div></div>' +
-      '<div class="ap-detail"><div class="ap-col">' +
-      '<div class="ap-metrics"><div class="ap-metric"><div class="lbl">A bordo</div><div class="val">' + n + ' / ' + e.asientos + '</div>' +
-      '<div class="ap-bar-bg"><div class="ap-bar-fg ' + (e.excedidos.length ? 'red' : 'green') + '" style="width:' + pct + '%"></div></div></div>' +
-      '<div class="ap-metric"><div class="lbl">Conductor (NFC)</div><div class="val sm">' + esc(cond || 'Sin identificar') + '</div></div></div>' +
-      '<div class="ap-plano">' + svgPlano(v.d, e) + '</div>' +
-      '<div class="ap-legend"><span><i class="sw occ"></i>Pasajero</span><span><i class="sw unk"></i>Sin registrar</span><span><i class="sw drv"></i>Conductor</span><span><i class="sw free"></i>Libre</span></div>' +
-      (e.excedidos.length ? '<div class="ap-warn red">' + e.excedidos.length + ' pasajero(s) a bordo sin asiento: se superó la capacidad.</div>' : '') +
-      '</div><div class="ap-col">' +
-      '<h4>A bordo</h4><div class="ap-list">' + abordo + '</div>' +
-      '<h4>Últimos eventos</h4><div class="ap-list">' + log + '</div>' +
-      '</div></div>';
-    $('#ap-back').onclick = function () { S.vista = 'flota'; render(); };
-    body.querySelectorAll('[data-reg]').forEach(function (b) {
-      b.onclick = function () { abrirFormPasajero(null, b.getAttribute('data-reg')); };
-    });
+    Mapa.actualizar(id, e);
   }
+
+  /* --- Minimapa (Leaflet + OpenStreetMap) --- */
+  var Mapa = (function () {
+    var LEAFLET_JS = 'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js';
+    var LEAFLET_CSS = 'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css';
+    var EV = { sube: 'up', excedido: 'up', baja: 'down', vaciado: 'down' };
+    var M = null;         // estado del mapa del vehículo actual
+    var carga = null;     // promesa de carga de Leaflet
+    var posCache = {};    // clave de evento -> [lat, lon] | null
+
+    function cargarLeaflet() {
+      if (window.L) return Promise.resolve(window.L);
+      if (carga) return carga;
+      carga = new Promise(function (res, rej) {
+        if (!document.querySelector('link[data-ap-leaflet]')) {
+          var l = document.createElement('link');
+          l.rel = 'stylesheet'; l.href = LEAFLET_CSS; l.setAttribute('data-ap-leaflet', '1');
+          document.head.appendChild(l);
+        }
+        var s = document.createElement('script');
+        s.src = LEAFLET_JS;
+        s.onload = function () { window.L ? res(window.L) : rej(new Error('Leaflet no disponible')); };
+        s.onerror = function () { carga = null; rej(new Error('No se pudo cargar el mapa.')); };
+        document.head.appendChild(s);
+      });
+      return carga;
+    }
+    function clave(l) { return l.t + '|' + l.hex + '|' + l.accion; }
+    function msg(t) { var el = $('#ap-map-msg'); if (el) { el.textContent = t || ''; el.style.display = t ? '' : 'none'; } }
+
+    function iniciar(dev) {
+      if (M && M.map) { try { M.map.remove(); } catch (e) { /* ya removido */ } }
+      M = { dev: dev, map: null, ruta: [], ultimoT: null, linea: null, veh: null, capa: null, marcas: {}, encuadrado: false, ocupado: false };
+      var yo = M;
+      cargarLeaflet().then(function (L) {
+        var el = $('#ap-map');
+        if (M !== yo || !el) return;
+        yo.map = L.map(el, { zoomControl: true, attributionControl: true }).setView([-38.95, -68.06], 11);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          maxZoom: 19, attribution: '&copy; OpenStreetMap'
+        }).addTo(yo.map);
+        yo.capa = L.layerGroup().addTo(yo.map);
+        msg('');
+        if (S.vista === 'detalle' && S.sel === dev) actualizar(dev, estadoVehiculo(dev));
+      }).catch(function (e) { msg(errMsg(e)); });
+    }
+
+    function inicioRuta(e) {
+      var ini = Date.now() - (Number(S.cfg.ventanaHoras) || 12) * 3600000;
+      return ini;
+    }
+
+    function puntoColor(tipo) { return tipo === 'up' ? '#4aa75e' : '#4e677e'; }
+
+    function actualizar(dev, e) {
+      if (!M || M.dev !== dev || !M.map || M.ocupado) return;
+      var yo = M, L = window.L;
+      yo.ocupado = true;
+      var desde = yo.ultimoT ? new Date(yo.ultimoT + 1) : new Date(inicioRuta(e));
+      var hasta = new Date();
+      var eventos = e.log.filter(function (l) { return EV[l.accion]; });
+      var faltan = eventos.filter(function (l) { return !(clave(l) in posCache); });
+
+      var calls = [['Get', { typeName: 'LogRecord', search: { deviceSearch: { id: dev }, fromDate: desde.toISOString(), toDate: hasta.toISOString() } }]];
+      faltan.forEach(function (l) {
+        var t = new Date(l.t).toISOString();
+        calls.push(['Get', { typeName: 'LogRecord', search: { deviceSearch: { id: dev }, fromDate: t, toDate: t } }]);
+      });
+      multi(calls).then(function (res) {
+        if (M !== yo) return;
+        (res[0] || []).forEach(function (lr) {
+          var t = new Date(lr.dateTime).getTime();
+          if ((!lr.latitude && !lr.longitude) || (yo.ultimoT && t <= yo.ultimoT)) return;
+          yo.ruta.push([lr.latitude, lr.longitude]);
+          yo.ultimoT = t;
+        });
+        faltan.forEach(function (l, i) {
+          var lr = (res[i + 1] || []).filter(function (x) { return x.latitude || x.longitude; })[0];
+          posCache[clave(l)] = lr ? [lr.latitude, lr.longitude] : null;
+        });
+        dibujar(yo, eventos, L);
+      }).catch(function (err) { msg('No se pudo leer el recorrido: ' + errMsg(err)); })
+        .then(function () { yo.ocupado = false; });
+    }
+
+    function dibujar(yo, eventos, L) {
+      var ruta = yo.ruta;
+      if (ruta.length > 4000) { // aligera el trazo sin perder el último punto
+        var paso = Math.ceil(ruta.length / 4000);
+        ruta = ruta.filter(function (p, i) { return i % paso === 0 || i === yo.ruta.length - 1; });
+      }
+      if (!yo.linea) yo.linea = L.polyline(ruta, { color: '#0078d3', weight: 4, opacity: 0.8 }).addTo(yo.map);
+      else yo.linea.setLatLngs(ruta);
+
+      var ult = yo.ruta[yo.ruta.length - 1];
+      if (ult) {
+        if (!yo.veh) yo.veh = L.circleMarker(ult, { radius: 8, color: '#fff', weight: 3, fillColor: '#25477b', fillOpacity: 1 }).addTo(yo.map).bindTooltip('Posición actual');
+        else yo.veh.setLatLng(ult);
+        yo.veh.bringToFront();
+      }
+
+      var vivos = {};
+      eventos.forEach(function (l) {
+        var k = clave(l), pos = posCache[k];
+        if (!pos) return;
+        vivos[k] = 1;
+        if (yo.marcas[k]) return;
+        var tipo = EV[l.accion];
+        var nom = nombrePas(l.hex) || 'Tarjeta ' + l.hex;
+        var html = '<b>' + esc(nom) + '</b><br>' + (tipo === 'up' ? 'Subió' : 'Bajó') + (l.asiento ? ' · asiento ' + l.asiento : '') +
+          '<br>' + fechaHora(l.t) + '<br><span style="color:#4e677e">' + pos[0].toFixed(5) + ', ' + pos[1].toFixed(5) + '</span>';
+        yo.marcas[k] = L.circleMarker(pos, { radius: 7, color: '#fff', weight: 2, fillColor: puntoColor(tipo), fillOpacity: 1 })
+          .bindPopup(html).bindTooltip(esc(nom) + ' · ' + (tipo === 'up' ? 'subió' : 'bajó') + ' ' + hora(l.t))
+          .addTo(yo.capa);
+      });
+      Object.keys(yo.marcas).forEach(function (k) { if (!vivos[k]) { yo.capa.removeLayer(yo.marcas[k]); delete yo.marcas[k]; } });
+
+      if (!yo.encuadrado) {
+        var pts = ruta.slice();
+        Object.keys(yo.marcas).forEach(function (k) { pts.push(yo.marcas[k].getLatLng()); });
+        if (pts.length > 1) { yo.map.fitBounds(L.latLngBounds(pts), { padding: [24, 24], maxZoom: 16 }); yo.encuadrado = true; }
+        else if (pts.length === 1) { yo.map.setView(pts[0], 15); yo.encuadrado = true; }
+        else msg('Sin posiciones GPS en las últimas ' + S.cfg.ventanaHoras + ' h.');
+      }
+      if (yo.ruta.length || Object.keys(yo.marcas).length) msg('');
+    }
+
+    function enfocar(k) {
+      if (!M || !M.map || !M.marcas[k]) return;
+      var el = $('#ap-map');
+      if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      M.map.setView(M.marcas[k].getLatLng(), Math.max(M.map.getZoom(), 16));
+      M.marcas[k].openPopup();
+    }
+
+    function cerrar() {
+      if (M && M.map) { try { M.map.remove(); } catch (e) { /* nada */ } }
+      M = null;
+    }
+
+    return { EV: EV, iniciar: iniciar, actualizar: actualizar, enfocar: enfocar, clave: clave, cerrar: cerrar };
+  })();
 
   /* --- Pasajeros --- */
   function tarjetasSinRegistrar() {
@@ -920,7 +1085,8 @@ geotab.addin.asientosPid = function () {
       '<label class="chk"><input type="checkbox" name="resetIgnicion"' + (c.resetIgnicion ? ' checked' : '') + '> Vaciar el vehículo al apagar el motor</label>' +
       '<label>Ventana de lecturas (horas)<input name="ventanaHoras" type="number" min="1" max="48" step="1" value="' + esc(c.ventanaHoras) + '">' +
       '<small>Cuántas horas hacia atrás se reconstruye quién está a bordo.</small></label>' +
-      '<label>Refresco (segundos)<input name="refrescoSeg" type="number" min="10" max="300" step="1" value="' + esc(c.refrescoSeg) + '"></label>' +
+      '<label>Refresco (segundos)<input name="refrescoSeg" type="number" min="5" max="300" step="1" value="' + esc(c.refrescoSeg) + '">' +
+      '<small>Cada cuánto se consultan las lecturas nuevas. Mínimo 5 s.</small></label>' +
       '<div class="ap-err" id="ap-cerr"></div><button type="submit" class="primary">Guardar configuración</button></form>';
     $('#ap-cfg').onsubmit = function (ev) {
       ev.preventDefault();
@@ -931,7 +1097,7 @@ geotab.addin.asientosPid = function () {
         modo: f.elements.modo.value,
         resetIgnicion: f.elements.resetIgnicion.checked,
         ventanaHoras: Math.min(48, Math.max(1, Math.round(Number(f.elements.ventanaHoras.value) || 12))),
-        refrescoSeg: Math.min(300, Math.max(10, Math.round(Number(f.elements.refrescoSeg.value) || 20)))
+        refrescoSeg: Math.min(300, Math.max(5, Math.round(Number(f.elements.refrescoSeg.value) || 5)))
       };
       var cambiaVentana = nv.ventanaHoras !== S.cfg.ventanaHoras;
       guardarRec(S.cfgRec, { tipo: 'config', valores: nv }).then(function (r) {
@@ -946,7 +1112,7 @@ geotab.addin.asientosPid = function () {
 
   function iniciarTimer() {
     if (timer) clearInterval(timer);
-    timer = setInterval(refrescar, (Number(S.cfg.refrescoSeg) || 20) * 1000);
+    timer = setInterval(refrescar, Math.max(5, Number(S.cfg.refrescoSeg) || 5) * 1000);
   }
 
   return {

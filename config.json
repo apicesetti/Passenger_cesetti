@@ -1,7 +1,7 @@
 {
   "name": "Mapa de asientos PID",
   "supportEmail": "soporte@cesetti.com.ar",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "items": [
     {
       "url": "https://apicesetti.github.io/Passenger_cesetti/asientosPid.html",
