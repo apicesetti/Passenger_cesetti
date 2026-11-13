@@ -92,6 +92,7 @@
 .ap-warn { background: var(--ap-warn-bg); color: var(--ap-warn-fg); border-left: 4px solid var(--ap-warn); border-radius: 0; padding: 0.625rem 0.875rem; margin-bottom: 1rem; font-size: 0.8125rem; }
 .ap-warn.red { background: var(--ap-err-bg); color: var(--ap-err-fg); border-left-color: var(--ap-danger); margin-top: 0.75rem; }
 .ap-warn a { color: inherit; font-weight: 500; }
+.ap-tag.geo { background: var(--ap-info-bg); color: var(--ap-link); border-color: #9ed5ff; }
 .ap-tag { display: inline-block; font-size: 0.6875rem; line-height: 1rem; background: var(--ap-bg-1); color: var(--ap-text-2); border: 1px solid var(--ap-border); border-radius: 0.5rem; padding: 0 0.5rem; font-weight: 400; vertical-align: middle; }
 
 /* Flota (zen-card) */
@@ -173,3 +174,11 @@
 .ap-dlg-btns { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.5rem; }
 .ap-toast { position: fixed; right: 1.5rem; bottom: 1.5rem; background: var(--backgrounds-reverse-1, #1f2833); color: #fff; padding: 0.75rem 1rem; border-radius: var(--ap-radius); font-size: 0.875rem; z-index: 10001; box-shadow: 0 4px 12px rgba(31, 40, 51, .24); }
 .ap-toast.err { background: var(--ap-danger); }
+
+/* Historial */
+.ap-hist-f { align-items: flex-end; background: var(--ap-bg-1); border-radius: 0.5rem; padding: 0.75rem 1rem; }
+.ap-hist-f label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.75rem; font-weight: 500; }
+.ap-hist-f input[type=search] { min-width: 14rem; }
+.ap-ev { display: inline-block; font-size: 0.75rem; border-radius: 0.5rem; padding: 0.0625rem 0.5rem; white-space: nowrap; }
+.ap-ev.up { background: var(--ap-ok-bg); color: var(--ap-ok-fg); }
+.ap-ev.down { background: var(--ap-bg-1); color: var(--ap-text-2); }

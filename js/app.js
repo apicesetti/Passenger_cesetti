@@ -23,12 +23,15 @@ geotab.addin.asientosPid = function () {
     ignOff: {},                // deviceId -> [t]
     conductores: {},           // deviceId -> userId
     usuarios: {},              // userId -> nombre
+    usuariosTarjeta: {},       // hex -> {userId, nombre, legajo} (usuarios de Geotab con llave)
+    usuariosLeidos: 0,         // timestamp de la última lectura de usuarios
     feedVersion: null,
     vista: 'flota',
     sel: null,
     filtroFlota: '',
     filtroPas: '',
     filtroVeh: '',
+    hist: { desde: '', hasta: '', dev: '', q: '', evento: '', filas: null, cargando: false, aviso: '' },
     actualizado: null,
     error: null
   };
@@ -121,6 +124,41 @@ geotab.addin.asientosPid = function () {
     });
   }
 
+  /* Usuarios de Geotab con llaves: el serialNumber de la llave es el hex de la tarjeta RFID. */
+  function cargarUsuariosTarjeta() {
+    return call('Get', {
+      typeName: 'User',
+      search: { isDriver: true, fromDate: new Date().toISOString() },
+      propertySelector: { fields: ['id', 'name', 'firstName', 'lastName', 'employeeNo', 'keys'], isIncluded: true }
+    }).then(function (us) {
+      var mapa = {};
+      (us || []).forEach(function (u) {
+        (u.keys || []).forEach(function (k) {
+          var hex = PidLogic.normHex(k && k.serialNumber);
+          if (hex.length < 8) return;
+          mapa[hex] = {
+            userId: u.id,
+            nombre: ((u.firstName || '') + ' ' + (u.lastName || '')).trim() || u.name,
+            usuario: u.name,
+            legajo: u.employeeNo || '',
+            tipoLlave: k.driverKeyType || ''
+          };
+        });
+      });
+      S.usuariosTarjeta = mapa;
+      S.usuariosLeidos = Date.now();
+    });
+  }
+
+  /* Quién es una tarjeta: primero el usuario de Geotab con esa llave, si no el padrón del add-in. */
+  function persona(hex) {
+    var u = S.usuariosTarjeta[hex];
+    if (u) return { nombre: u.nombre, legajo: u.legajo, origen: 'geotab', userId: u.userId, usuario: u.usuario };
+    var p = S.pasajeros[hex];
+    if (p) return { nombre: p.d.nombre, legajo: p.d.legajo, empresa: p.d.empresa, turno: p.d.turno, origen: 'padron' };
+    return null;
+  }
+
   /* ---------- datos en vivo ---------- */
   function desdeVentana() { return Date.now() - (Number(S.cfg.ventanaHoras) || 12) * 3600000; }
 
@@ -191,7 +229,12 @@ geotab.addin.asientosPid = function () {
     if (cargando || !api) return Promise.resolve();
     cargando = true;
     return leerFeed()
-      .then(function () { podarVentana(); return Promise.all([leerConductores(), leerIgnicion()]); })
+      .then(function () {
+        podarVentana();
+        var tareas = [leerConductores(), leerIgnicion()];
+        if (Date.now() - S.usuariosLeidos > 300000) tareas.push(cargarUsuariosTarjeta());
+        return Promise.all(tareas);
+      })
       .then(function () { S.actualizado = Date.now(); S.error = null; })
       .catch(function (e) { S.error = errMsg(e); })
       .then(function () { cargando = false; renderVivo(); });
@@ -204,14 +247,14 @@ geotab.addin.asientosPid = function () {
     (S.ignOff[devId] || []).forEach(function (t) { evs.push({ t: t, tipo: 'ign_off' }); });
     var r = PidLogic.procesar(evs, S.cfg, asientos);
     r.asientos = asientos;
-    r.desconocidas = r.abordo.filter(function (a) { return !S.pasajeros[a.hex]; }).length;
+    r.desconocidas = r.abordo.filter(function (a) { return !persona(a.hex); }).length;
     r.ultima = evs.length ? Math.max.apply(null, evs.map(function (e) { return e.t; })) : null;
     return r;
   }
 
   function nombrePas(hex) {
-    var p = S.pasajeros[hex];
-    return p ? p.d.nombre : null;
+    var p = persona(hex);
+    return p ? p.nombre : null;
   }
   function nombreDev(id) {
     var d = S.devices[id];
@@ -224,7 +267,7 @@ geotab.addin.asientosPid = function () {
 
   /* ---------- render ---------- */
   function render() {
-    var tabs = [['flota', 'Flota'], ['pasajeros', 'Pasajeros'], ['vehiculos', 'Vehículos'], ['config', 'Configuración']];
+    var tabs = [['flota', 'Flota'], ['historial', 'Historial'], ['pasajeros', 'Pasajeros'], ['vehiculos', 'Vehículos'], ['config', 'Configuración']];
     var activa = S.vista === 'detalle' ? 'flota' : S.vista;
     root.innerHTML =
       '<div class="ap-head"><div class="ap-title">Mapa de asientos</div>' +
@@ -240,6 +283,7 @@ geotab.addin.asientosPid = function () {
     else if (S.vista === 'detalle') renderDetalle();
     else if (S.vista === 'pasajeros') renderPasajeros();
     else if (S.vista === 'vehiculos') renderVehiculos();
+    else if (S.vista === 'historial') renderHistorial();
     else renderConfig();
     renderStatus();
   }
@@ -415,7 +459,7 @@ geotab.addin.asientosPid = function () {
     var vistas = {};
     Object.keys(S.lecturas).forEach(function (dev) {
       S.lecturas[dev].forEach(function (l) {
-        if (l.tipo !== 'tarjeta' || S.pasajeros[l.hex]) return;
+        if (l.tipo !== 'tarjeta' || persona(l.hex)) return;
         if (!vistas[l.hex] || vistas[l.hex].t < l.t) vistas[l.hex] = { t: l.t, dev: dev };
       });
     });
@@ -425,11 +469,18 @@ geotab.addin.asientosPid = function () {
 
   function renderPasajeros() {
     var q = S.filtroPas.trim().toLowerCase();
-    var lista = Object.keys(S.pasajeros).map(function (h) { return S.pasajeros[h]; }).filter(function (p) {
+    var filas = Object.keys(S.usuariosTarjeta).map(function (h) {
+      var u = S.usuariosTarjeta[h];
+      return { hex: h, nombre: u.nombre, legajo: u.legajo, empresa: '', turno: '', activo: true, origen: 'geotab', userId: u.userId, usuario: u.usuario };
+    }).concat(Object.keys(S.pasajeros).map(function (h) {
+      var d = S.pasajeros[h].d;
+      return { hex: h, nombre: d.nombre, legajo: d.legajo, empresa: d.empresa, turno: d.turno, activo: d.activo !== false, origen: 'padron', pisado: !!S.usuariosTarjeta[h] };
+    }));
+    var nGeotab = Object.keys(S.usuariosTarjeta).length, nPadron = Object.keys(S.pasajeros).length;
+    var lista = filas.filter(function (f) {
       if (!q) return true;
-      var d = p.d;
-      return [d.hex, d.nombre, d.legajo, d.empresa, d.turno].join(' ').toLowerCase().indexOf(q) >= 0;
-    }).sort(function (a, b) { return String(a.d.nombre).localeCompare(String(b.d.nombre)); });
+      return [f.hex, f.nombre, f.legajo, f.empresa, f.turno, f.usuario].join(' ').toLowerCase().indexOf(q) >= 0;
+    }).sort(function (a, b) { return String(a.nombre).localeCompare(String(b.nombre)); });
     var sinReg = tarjetasSinRegistrar();
 
     $('#ap-body').innerHTML =
@@ -438,12 +489,17 @@ geotab.addin.asientosPid = function () {
       }).join('') + '</div></div>' : '') +
       '<div class="ap-bar"><input id="ap-qp" type="search" class="grow" placeholder="Buscar nombre, legajo, hex…" value="' + esc(S.filtroPas) + '">' +
       '<button id="ap-new" class="primary">+ Pasajero</button><button id="ap-imp">Importar Excel</button><input id="ap-file" type="file" accept=".xlsx,.xls,.csv" hidden></div>' +
-      '<div class="ap-muted-line">' + Object.keys(S.pasajeros).length + ' pasajeros registrados</div>' +
-      '<table class="ap-table"><thead><tr><th>Hex tarjeta</th><th>Nombre</th><th>Legajo / DNI</th><th>Empresa</th><th>Turno</th><th>Activo</th><th></th></tr></thead><tbody>' +
-      (lista.map(function (p) {
-        var d = p.d;
-        return '<tr><td class="mono">' + esc(d.hex) + '</td><td>' + esc(d.nombre) + '</td><td>' + esc(d.legajo) + '</td><td>' + esc(d.empresa) + '</td><td>' + esc(d.turno) + '</td>' +
-          '<td>' + (d.activo === false ? 'No' : 'Sí') + '</td><td class="ap-actions"><button data-edit="' + esc(d.hex) + '">Editar</button><button class="danger" data-del="' + esc(d.hex) + '">Borrar</button></td></tr>';
+      '<div class="ap-muted-line">' + (nGeotab + nPadron) + ' tarjetas identificadas: ' + nGeotab + ' por usuarios de Geotab con llave, ' + nPadron + ' en el padrón del add-in</div>' +
+      '<table class="ap-table"><thead><tr><th>Hex tarjeta</th><th>Nombre</th><th>Legajo / DNI</th><th>Empresa</th><th>Turno</th><th>Origen</th><th></th></tr></thead><tbody>' +
+      (lista.map(function (f) {
+        var origen = f.origen === 'geotab'
+          ? '<span class="ap-tag geo">Usuario Geotab</span>'
+          : '<span class="ap-tag">Padrón</span>' + (f.pisado ? ' <span class="muted" title="Hay un usuario de Geotab con esta llave; se usa el usuario.">(reemplazado)</span>' : '') + (f.activo ? '' : ' <span class="muted">inactivo</span>');
+        var acciones = f.origen === 'geotab'
+          ? '<a class="ap-link" href="#user,id:' + encodeURIComponent(f.userId) + '" target="_top">Ver usuario</a>'
+          : '<button data-edit="' + esc(f.hex) + '">Editar</button><button class="danger" data-del="' + esc(f.hex) + '">Borrar</button>';
+        return '<tr><td class="mono">' + esc(f.hex) + '</td><td>' + esc(f.nombre) + (f.usuario && f.usuario !== f.nombre ? ' <span class="muted">' + esc(f.usuario) + '</span>' : '') + '</td><td>' + esc(f.legajo) + '</td><td>' + esc(f.empresa) + '</td><td>' + esc(f.turno) + '</td>' +
+          '<td>' + origen + '</td><td class="ap-actions">' + acciones + '</td></tr>';
       }).join('') || '<tr><td colspan="7" class="ap-empty">Sin pasajeros.</td></tr>') +
       '</tbody></table>';
 
@@ -516,6 +572,7 @@ geotab.addin.asientosPid = function () {
         var nombre = f.elements.nombre.value.trim();
         if (hex.length < 8) throw new Error('El hex debe tener al menos 8 caracteres (4 bytes).');
         if (!nombre) throw new Error('Ingresá el nombre.');
+        if (S.usuariosTarjeta[hex]) throw new Error('Esa tarjeta ya es la llave del usuario de Geotab ' + S.usuariosTarjeta[hex].usuario + '.');
         var existente = S.pasajeros[hex];
         if (existente && (!rec || existente.id !== rec.id)) throw new Error('Esa tarjeta ya está asignada a ' + existente.d.nombre + '.');
         var nd = { tipo: 'pasajero', hex: hex, nombre: nombre, legajo: f.elements.legajo.value.trim(), empresa: f.elements.empresa.value.trim(), turno: f.elements.turno.value.trim(), activo: f.elements.activo.checked };
@@ -655,6 +712,198 @@ geotab.addin.asientosPid = function () {
     });
   }
 
+  /* --- Historial --- */
+  var EVENTOS_HIST = { sube: 'Subió', baja: 'Bajó', vaciado: 'Bajó (motor apagado)', excedido: 'Subió sin asiento', reubicado: 'Pasó a asiento', reascenso: 'Volvió a marcar' };
+  var MAX_FILAS_HIST = 3000;
+
+  function fechaInput(d) {
+    var z = function (n) { return (n < 10 ? '0' : '') + n; };
+    return d.getFullYear() + '-' + z(d.getMonth() + 1) + '-' + z(d.getDate());
+  }
+  function fechaHora(t) {
+    var d = new Date(t);
+    return d.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' }) + ' ' +
+      d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
+  }
+
+  function renderHistorial() {
+    var h = S.hist;
+    if (!h.desde) { h.desde = fechaInput(new Date()); h.hasta = h.desde; }
+    var vehs = Object.keys(S.vehiculos).sort(function (a, b) { return nombreDev(a).localeCompare(nombreDev(b)); });
+    $('#ap-body').innerHTML =
+      '<form class="ap-bar ap-hist-f" id="ap-hf">' +
+      '<label>Desde<input type="date" name="desde" value="' + esc(h.desde) + '" required></label>' +
+      '<label>Hasta<input type="date" name="hasta" value="' + esc(h.hasta) + '" required></label>' +
+      '<label>Vehículo<select name="dev"><option value="">Todos</option>' + vehs.map(function (id) {
+        var d = S.devices[id] || {};
+        return '<option value="' + esc(id) + '"' + (h.dev === id ? ' selected' : '') + '>' + esc((d.licensePlate ? d.licensePlate + ' · ' : '') + nombreDev(id)) + '</option>';
+      }).join('') + '</select></label>' +
+      '<label>Evento<select name="evento"><option value="">Subidas y bajadas</option><option value="sube"' + (h.evento === 'sube' ? ' selected' : '') + '>Solo subidas</option><option value="baja"' + (h.evento === 'baja' ? ' selected' : '') + '>Solo bajadas</option></select></label>' +
+      '<label class="grow">Pasajero<input type="search" name="q" placeholder="Nombre, legajo o hex" value="' + esc(h.q) + '"></label>' +
+      '<button type="submit" class="primary"' + (h.cargando ? ' disabled' : '') + '>' + (h.cargando ? 'Buscando…' : 'Buscar') + '</button>' +
+      '<button type="button" id="ap-csv"' + (h.filas && h.filas.length ? '' : ' disabled') + '>Exportar a Excel</button>' +
+      '</form>' +
+      (h.aviso ? '<div class="ap-warn">' + esc(h.aviso) + '</div>' : '') +
+      '<div id="ap-hres"></div>';
+    var f = $('#ap-hf');
+    f.onsubmit = function (ev) {
+      ev.preventDefault();
+      h.desde = f.elements.desde.value; h.hasta = f.elements.hasta.value; h.dev = f.elements.dev.value;
+      h.evento = f.elements.evento.value; h.q = f.elements.q.value;
+      buscarHistorial();
+    };
+    f.elements.q.oninput = function () { h.q = f.elements.q.value; renderHistTabla(); };
+    f.elements.evento.onchange = function () { h.evento = f.elements.evento.value; renderHistTabla(); };
+    $('#ap-csv').onclick = exportarHistorial;
+    renderHistTabla();
+  }
+
+  function filasHistFiltradas() {
+    var h = S.hist;
+    var q = h.q.trim().toLowerCase();
+    return (h.filas || []).filter(function (r) {
+      if (h.evento === 'sube' && ['sube', 'excedido'].indexOf(r.accion) < 0) return false;
+      if (h.evento === 'baja' && ['baja', 'vaciado'].indexOf(r.accion) < 0) return false;
+      if (!q) return true;
+      var p = persona(r.hex) || {};
+      return [r.hex, p.nombre, p.legajo, p.usuario].join(' ').toLowerCase().indexOf(q) >= 0;
+    });
+  }
+
+  function renderHistTabla() {
+    var cont = $('#ap-hres');
+    if (!cont) return;
+    var h = S.hist;
+    if (h.filas == null) { cont.innerHTML = '<div class="ap-empty">Elegí el rango de fechas y tocá Buscar.</div>'; return; }
+    var filas = filasHistFiltradas();
+    var mostrar = filas.slice(0, 500);
+    cont.innerHTML = '<div class="ap-muted-line">' + filas.length + ' eventos' + (filas.length > mostrar.length ? ' (se muestran los primeros 500; exportá a Excel para ver todos)' : '') + '</div>' +
+      '<table class="ap-table"><thead><tr><th>Fecha y hora</th><th>Evento</th><th>Pasajero</th><th>Hex tarjeta</th><th>Vehículo</th><th>Asiento</th><th>Ubicación</th></tr></thead><tbody>' +
+      (mostrar.map(function (r) {
+        var p = persona(r.hex);
+        var d = S.devices[r.dev] || {};
+        var sube = r.accion === 'sube' || r.accion === 'excedido';
+        var ubic = r.lat != null
+          ? '<a href="https://www.google.com/maps?q=' + r.lat + ',' + r.lon + '" target="_blank" rel="noopener">' + esc(r.direccion || (r.lat.toFixed(5) + ', ' + r.lon.toFixed(5))) + '</a>'
+          : '<span class="muted">Sin posición</span>';
+        return '<tr><td>' + fechaHora(r.t) + '</td>' +
+          '<td><span class="ap-ev ' + (sube ? 'up' : 'down') + '">' + (sube ? '↗ ' : '↙ ') + esc(EVENTOS_HIST[r.accion] || r.accion) + '</span></td>' +
+          '<td>' + (p ? esc(p.nombre) : '<span class="amber">Sin registrar</span>') + '</td>' +
+          '<td class="mono">' + esc(r.hex) + '</td>' +
+          '<td>' + esc(d.licensePlate || '') + ' <span class="muted">' + esc(nombreDev(r.dev)) + '</span></td>' +
+          '<td>' + (r.asiento || '—') + '</td><td>' + ubic + '</td></tr>';
+      }).join('') || '<tr><td colspan="7" class="ap-empty">Sin subidas ni bajadas en el período.</td></tr>') +
+      '</tbody></table>';
+  }
+
+  function buscarHistorial() {
+    var h = S.hist;
+    var d0 = new Date(h.desde + 'T00:00:00'), d1 = new Date(h.hasta + 'T23:59:59.999');
+    h.aviso = '';
+    if (!(d1 >= d0)) { h.aviso = 'La fecha "hasta" tiene que ser igual o posterior a "desde".'; renderHistorial(); return; }
+    if (d1 - d0 > 31 * 86400000) { h.aviso = 'El rango máximo es de 31 días.'; renderHistorial(); return; }
+    var ids = h.dev ? [h.dev] : Object.keys(S.vehiculos);
+    if (!ids.length) { h.aviso = 'No hay vehículos configurados.'; renderHistorial(); return; }
+    // Se leen 12 h antes del rango para reconstruir quién ya iba a bordo al empezar.
+    var look = new Date(d0.getTime() - 12 * 3600000).toISOString(), fin = d1.toISOString();
+    h.cargando = true; renderHistorial();
+
+    var calls = ids.map(function (id) {
+      return ['Get', { typeName: 'CustomData', search: { deviceSearch: { id: id }, fromDate: look, toDate: fin } }];
+    });
+    if (S.cfg.resetIgnicion) ids.forEach(function (id) {
+      calls.push(['Get', { typeName: 'StatusData', search: { deviceSearch: { id: id }, diagnosticSearch: { id: 'DiagnosticIgnitionId' }, fromDate: look, toDate: fin } }]);
+    });
+    multi(calls).then(function (res) {
+      var filas = [];
+      ids.forEach(function (id, i) {
+        var evs = (res[i] || []).map(function (cd) {
+          var dec = PidLogic.decodeCustomData(cd.data);
+          return { t: new Date(cd.dateTime).getTime(), tipo: dec.tipo === 'tarjeta' ? 'tarjeta' : 'texto', hex: dec.hex, texto: dec.texto };
+        });
+        if (S.cfg.resetIgnicion) {
+          (res[ids.length + i] || []).forEach(function (sd) { if (Number(sd.data) === 0) evs.push({ t: new Date(sd.dateTime).getTime(), tipo: 'ign_off' }); });
+        }
+        var asientos = S.vehiculos[id] ? Number(S.vehiculos[id].d.asientos) || 0 : 99;
+        PidLogic.procesar(evs, S.cfg, asientos).log.forEach(function (l) {
+          if (!EVENTOS_HIST[l.accion] || l.t < d0.getTime() || l.t > d1.getTime()) return;
+          filas.push({ t: l.t, accion: l.accion, hex: l.hex, asiento: l.asiento, dev: id });
+        });
+      });
+      filas.sort(function (a, b) { return b.t - a.t; });
+      if (filas.length > MAX_FILAS_HIST) {
+        h.aviso = 'Hay ' + filas.length + ' eventos; se ubican los ' + MAX_FILAS_HIST + ' más recientes. Acotá el rango para ver todos.';
+        filas = filas.slice(0, MAX_FILAS_HIST);
+      }
+      return ubicarFilas(filas).then(function () { return filas; });
+    }).then(function (filas) {
+      h.filas = filas;
+    }).catch(function (e) {
+      h.aviso = 'No se pudo leer el historial: ' + errMsg(e);
+    }).then(function () {
+      h.cargando = false;
+      if (S.vista === 'historial') renderHistorial();
+    });
+  }
+
+  /* Posición GPS de cada evento: LogRecord con fromDate = toDate devuelve la posición
+     interpolada por Geotab en ese instante. Luego la dirección con GetAddresses. */
+  function ubicarFilas(filas) {
+    if (!filas.length) return Promise.resolve();
+    return multi(filas.map(function (r) {
+      var t = new Date(r.t).toISOString();
+      return ['Get', { typeName: 'LogRecord', search: { deviceSearch: { id: r.dev }, fromDate: t, toDate: t } }];
+    })).then(function (res) {
+      res.forEach(function (lrs, i) {
+        var lr = (lrs || []).filter(function (x) { return x.latitude || x.longitude; })[0];
+        if (lr) { filas[i].lat = lr.latitude; filas[i].lon = lr.longitude; }
+      });
+      var claves = {}, coords = [];
+      filas.forEach(function (r) {
+        if (r.lat == null) return;
+        var k = r.lat.toFixed(5) + ',' + r.lon.toFixed(5);
+        if (!(k in claves)) { claves[k] = coords.length; coords.push({ x: r.lon, y: r.lat }); }
+        r.kc = claves[k];
+      });
+      if (!coords.length) return;
+      var lotes = [];
+      for (var i = 0; i < coords.length; i += 100) lotes.push(['GetAddresses', { coordinates: coords.slice(i, i + 100), movingAddresses: false }]);
+      return multi(lotes).then(function (rs) {
+        var dirs = [].concat.apply([], rs);
+        filas.forEach(function (r) {
+          var a = r.kc != null && dirs[r.kc];
+          if (!a) return;
+          var zonas = (a.zones || []).map(function (z) { return z.name; }).filter(Boolean);
+          r.direccion = zonas.length ? zonas.join(', ') + ' · ' + (a.formattedAddress || '') : a.formattedAddress;
+        });
+      }).catch(function () { /* sin direcciones: quedan las coordenadas */ });
+    });
+  }
+
+  function exportarHistorial() {
+    var filas = filasHistFiltradas().slice().reverse();
+    var cel = function (v) { v = v == null ? '' : String(v); return /[;"\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+    var lineas = [['Fecha', 'Hora', 'Evento', 'Pasajero', 'Legajo', 'Hex tarjeta', 'Origen', 'Patente', 'Vehículo', 'Asiento', 'Latitud', 'Longitud', 'Ubicación'].join(';')];
+    filas.forEach(function (r) {
+      var p = persona(r.hex) || {};
+      var d = new Date(r.t), dev = S.devices[r.dev] || {};
+      lineas.push([
+        d.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' }),
+        d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }),
+        EVENTOS_HIST[r.accion] || r.accion, p.nombre || 'Sin registrar', p.legajo || '', r.hex,
+        p.origen === 'geotab' ? 'Usuario Geotab' : (p.origen ? 'Padrón' : ''),
+        dev.licensePlate || '', nombreDev(r.dev), r.asiento || '',
+        r.lat != null ? String(r.lat).replace('.', ',') : '', r.lon != null ? String(r.lon).replace('.', ',') : '', r.direccion || ''
+      ].map(cel).join(';'));
+    });
+    var blob = new Blob(['﻿' + lineas.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'historial_pasajeros_' + S.hist.desde + '_' + S.hist.hasta + '.csv';
+    root.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
+  }
+
   /* --- Configuración --- */
   function renderConfig() {
     var c = S.cfg;
@@ -711,7 +960,7 @@ geotab.addin.asientosPid = function () {
       root = document.getElementById('asientosPid');
       S.feedVersion = null; S.lecturas = {}; S.error = null;
       render();
-      Promise.all([cargarAddInData(), cargarDevices()])
+      Promise.all([cargarAddInData(), cargarDevices(), cargarUsuariosTarjeta()])
         .then(function () { render(); return refrescar(); })
         .catch(function (e) { S.error = errMsg(e); render(); })
         .then(iniciarTimer);

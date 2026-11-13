@@ -5,7 +5,8 @@ Add-in para MyGeotab que muestra, en tiempo real, quién va sentado en cada veh�
 ## Vistas
 - **Flota**: tarjetas por vehículo con ocupación, conductor y alertas. Buscador por patente o nombre.
 - **Detalle**: plano del vehículo visto desde arriba (camioneta, combi o colectivo). Los asientos se llenan del 1 en adelante a medida que suben los pasajeros: verde = pasajero registrado, amarillo = tarjeta sin registrar, violeta = conductor.
-- **Pasajeros**: padrón propio (hex de tarjeta, nombre, legajo/DNI, empresa, turno). Alta, edición, baja, importación desde Excel/CSV y lista de tarjetas leídas sin registrar.
+- **Historial**: subidas y bajadas por rango de fechas (hasta 31 días), vehículo, tipo de evento y pasajero, con fecha, hora, asiento y ubicación (posición GPS interpolada por Geotab en el instante del evento + dirección y zona). Exporta a Excel (CSV).
+- **Pasajeros**: usuarios de Geotab con llave + padrón propio (hex de tarjeta, nombre, legajo/DNI, empresa, turno). Alta, edición, baja, importación desde Excel/CSV y lista de tarjetas leídas sin registrar.
 - **Vehículos**: tipo y cantidad de asientos de pasajeros por vehículo.
 - **Configuración**: descenso, desbloqueo, regla de bajada, vaciado por ignición, ventana y refresco.
 
@@ -14,6 +15,8 @@ Add-in para MyGeotab que muestra, en tiempo real, quién va sentado en cada veh�
 |---|---|
 | Lecturas de tarjetas | `CustomData` (trama `RUID` + UID). Se lee con `GetFeed`. |
 | Conductor | `DeviceStatusInfo.driver` → `User` |
+| Identidad del pasajero | 1) `User.keys[].serialNumber` de los conductores de Geotab (llave personalizada con el hex), 2) padrón en `AddInData` |
+| Ubicación del historial | `LogRecord` con `fromDate = toDate` (interpolado) + `GetAddresses` |
 | Ignición (opcional) | `StatusData` `DiagnosticIgnitionId` |
 | Padrón, vehículos y configuración | `AddInData` con `addInId = ad6jPCvZGTvCRcGDo4yXoiQ` |
 

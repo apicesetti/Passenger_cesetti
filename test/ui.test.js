@@ -28,7 +28,13 @@ function handle(method, p) {
   if (method === 'Get' && p.typeName === 'Device') return [{ id: 'bBA', name: 'CESETTI_TEST', licensePlate: 'AF123CD', serialNumber: 'G9Z8ZBFDMYZ6' }, { id: 'bBB', name: 'COLECTIVO 7', licensePlate: 'AE456GH' }];
   if (method === 'GetFeed') return p.fromVersion ? { data: [], toVersion: 'v2' } : { data: feed, toVersion: 'v1' };
   if (method === 'Get' && p.typeName === 'DeviceStatusInfo') return [{ device: { id: 'bBA' }, driver: { id: 'u1' } }, { device: { id: 'bBB' }, driver: 'UnknownDriverId' }];
+  if (method === 'Get' && p.typeName === 'User' && p.search.isDriver) return [
+    { id: 'b1C8', name: 'PASAJERO_1', firstName: 'PASAJERO', lastName: '1', keys: [{ driverKeyType: 'Custom', serialNumber: '8C9A8C13' }] },
+    { id: 'u1', name: 'jperez', firstName: 'Juan', lastName: 'Pérez', keys: [{ driverKeyType: 'Nfc', serialNumber: '04A1B2C3D4E5F6' }] }];
   if (method === 'Get' && p.typeName === 'User') return [{ id: 'u1', firstName: 'Juan', lastName: 'Pérez' }];
+  if (method === 'Get' && p.typeName === 'CustomData') return feed.filter((f) => f.device.id === p.search.deviceSearch.id && f.dateTime >= p.search.fromDate && f.dateTime <= p.search.toDate);
+  if (method === 'Get' && p.typeName === 'LogRecord') return [{ latitude: -38.9504623, longitude: -68.0575638, dateTime: p.search.fromDate }];
+  if (method === 'GetAddresses') return p.coordinates.map(() => ({ formattedAddress: 'Buenos Aires 444, Neuquén', zones: [{ name: 'Base Cesetti' }] }));
   if (method === 'Get' && p.typeName === 'StatusData') return [];
   throw new Error('no mock ' + method + ' ' + p.typeName);
 }
@@ -82,34 +88,50 @@ const txt = () => $('#asientosPid').textContent;
   // Detalle
   $('.ap-card').click(); await sleep(20);
   assert.strictEqual($$('.ap-seat').length, 16, '15 asientos + conductor');
-  assert.strictEqual($$('.ap-seat.unk').length, 2, '2 tarjetas sin registrar');
+  assert.strictEqual($$('.ap-seat.unk').length, 1, '1 tarjeta sin registrar (la otra es PASAJERO_1)');
+  assert.strictEqual($('.ap-seat[data-seat="1"] text').textContent, 'P1', 'PASAJERO 1 por llave de Geotab');
   assert.strictEqual($('.ap-seat[data-seat="1"] title').textContent.includes('8C9A8C13'), true);
   assert(txt().includes('Lector conectado'));
 
   // Registrar desde el detalle
-  $('[data-reg="8C9A8C13"]').click(); await sleep(10);
+  $('[data-reg="31012C0F"]').click(); await sleep(10);
   const f = $('.ap-dialog form');
-  assert.strictEqual(f.elements.hex.value, '8C9A8C13');
+  assert.strictEqual(f.elements.hex.value, '31012C0F');
   f.elements.nombre.value = 'Ana Gómez'; f.elements.legajo.value = '1234';
   f.dispatchEvent(new w.Event('submit', { cancelable: true })); await sleep(50);
   assert(!$('.ap-modal'), 'modal cerrado');
-  assert.strictEqual($$('.ap-seat.occ').length, 1);
-  assert.strictEqual($('.ap-seat[data-seat="1"] text').textContent, 'AG');
+  assert.strictEqual($$('.ap-seat.occ').length, 2);
+  assert.strictEqual($('.ap-seat[data-seat="2"] text').textContent, 'AG');
 
   // Duplicado rechazado
   $('[data-tab=pasajeros]').click(); await sleep(10);
   $('#ap-new').click(); await sleep(5);
-  const f2 = $('.ap-dialog form'); f2.elements.hex.value = '8c 9a 8c 13'; f2.elements.nombre.value = 'Otro';
+  const f2 = $('.ap-dialog form'); f2.elements.hex.value = '31 01 2c 0f'; f2.elements.nombre.value = 'Otro';
   f2.dispatchEvent(new w.Event('submit', { cancelable: true })); await sleep(30);
-  assert($('#ap-merr').textContent.includes('ya está asignada'), 'duplicado');
+  assert($('#ap-merr').textContent.includes('ya está asignada'), 'duplicado padrón');
+  f2.elements.hex.value = '8C9A8C13';
+  f2.dispatchEvent(new w.Event('submit', { cancelable: true })); await sleep(30);
+  assert($('#ap-merr').textContent.includes('PASAJERO_1'), 'duplicado usuario Geotab');
   $('[data-x]').click();
-  assert(txt().includes('31012C0F') && txt().includes('01020304'), 'chips sin registrar');
-  assert(txt().includes('1 pasajeros registrados'));
+  assert(txt().includes('01020304'), 'chip sin registrar');
+  assert(txt().includes('3 tarjetas identificadas: 2 por usuarios de Geotab'), txt());
+  assert(txt().includes('Usuario Geotab'));
+
+  // Historial
+  $('[data-tab=historial]').click(); await sleep(10);
+  $('#ap-hf').dispatchEvent(new w.Event('submit', { cancelable: true })); await sleep(120);
+  const filasH = $$('#ap-hres tbody tr');
+  assert.strictEqual(filasH.length, 3, 'historial: 3 subidas (2 en bBA, 1 en bBB)');
+  assert(txt().includes('Base Cesetti · Buenos Aires 444, Neuquén'), 'dirección con zona');
+  assert(txt().includes('PASAJERO 1') && txt().includes('Ana Gómez'));
+  const hq = $('#ap-hf').elements.q; hq.value = 'pasajero'; hq.dispatchEvent(new w.Event('input')); await sleep(5);
+  assert.strictEqual($$('#ap-hres tbody tr').length, 1, 'filtro por pasajero');
+  $('[data-tab=pasajeros]').click(); await sleep(10);
 
   // Borrar con confirmación propia
-  $('[data-del="8C9A8C13"]').click(); await sleep(5);
+  $('[data-del="31012C0F"]').click(); await sleep(5);
   $('[data-si]').click(); await sleep(30);
-  assert(txt().includes('0 pasajeros registrados'));
+  assert(txt().includes('0 en el padrón'));
 
   // Configuración
   $('[data-tab=config]').click(); await sleep(5);
